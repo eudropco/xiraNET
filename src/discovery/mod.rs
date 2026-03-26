@@ -1,3 +1,5 @@
+pub mod mesh;
+
 use crate::registry::ServiceRegistry;
 use crate::registry::models::ServiceEntry;
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+pub mod sla;
+pub mod trace_collector;
+
 use actix_web::{HttpResponse, HttpRequest};
 use prometheus::{
     Encoder, TextEncoder,

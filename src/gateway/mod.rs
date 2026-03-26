@@ -7,6 +7,11 @@ pub mod websocket;
 pub mod transform;
 pub mod body_transform;
 pub mod canary;
+pub mod connection_pool;
+pub mod request_queue;
+pub mod edge_cache;
+pub mod request_replay;
+pub mod graphql;
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use crate::config::RetryConfig;
