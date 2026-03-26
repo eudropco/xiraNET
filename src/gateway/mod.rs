@@ -31,8 +31,17 @@ pub async fn gateway_handler(
     plugin_manager: web::Data<PluginManager>,
     retry_config: web::Data<RetryConfig>,
 ) -> HttpResponse {
+    let request_start = std::time::Instant::now();
     let path = req.path().to_string();
     let method = req.method().to_string();
+    let peer_ip_log = req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "-".to_string());
+
+    // ═══ Request ID — her isteğe benzersiz UUID ═══
+    let request_id = req.headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // /xira/ admin routes are handled separately
     if path.starts_with("/xira") || path == "/metrics" || path == "/ws" || path == "/dashboard" {
@@ -331,5 +340,30 @@ pub async fn gateway_handler(
     }
 
     // Response'u oluştur ve döndür
-    proxy_result.into_response()
+    let mut final_response = proxy_result.into_response();
+
+    // ═══ Request-ID + Latency headers ═══
+    let duration_ms = request_start.elapsed().as_secs_f64() * 1000.0;
+    final_response.headers_mut().insert(
+        actix_web::http::header::HeaderName::from_static("x-request-id"),
+        actix_web::http::header::HeaderValue::from_str(&request_id).unwrap_or_else(|_| actix_web::http::header::HeaderValue::from_static("-")),
+    );
+    final_response.headers_mut().insert(
+        actix_web::http::header::HeaderName::from_static("x-response-time"),
+        actix_web::http::header::HeaderValue::from_str(&format!("{:.2}ms", duration_ms)).unwrap_or_else(|_| actix_web::http::header::HeaderValue::from_static("-")),
+    );
+
+    // ═══ Prometheus latency ═══
+    crate::metrics::HTTP_REQUEST_DURATION
+        .with_label_values(&[&method, &path])
+        .observe(duration_ms / 1000.0);
+
+    // ═══ Access Log (nginx combined format) ═══
+    let status_code = final_response.status().as_u16();
+    tracing::info!(
+        "{} {} {} {} {:.2}ms [{}]",
+        peer_ip_log, method, path, status_code, duration_ms, request_id
+    );
+
+    final_response
 }

@@ -37,21 +37,38 @@ pub async fn start_health_checker(
 
         for service in &services {
             let health_url = format!("{}{}", service.upstream, service.health_endpoint);
-            let result = client.get(&health_url).send().await;
 
-            let (new_status, log_msg) = match result {
-                Ok(resp) if resp.status().is_success() => {
-                    (ServiceStatus::Up, format!("{}: UP", service.name))
+            // Health check with retry (3 attempts)
+            let max_retries = 3u8;
+            let mut last_status = ServiceStatus::Down;
+            let mut last_msg = String::new();
+
+            for attempt in 1..=max_retries {
+                let result = client.get(&health_url).send().await;
+
+                match result {
+                    Ok(resp) if resp.status().is_success() => {
+                        last_status = ServiceStatus::Up;
+                        last_msg = format!("{}: UP", service.name);
+                        break; // Başarılı, retry gerekmez
+                    }
+                    Ok(resp) => {
+                        last_status = ServiceStatus::Down;
+                        last_msg = format!("{}: DOWN (HTTP {})", service.name, resp.status());
+                    }
+                    Err(e) => {
+                        last_status = ServiceStatus::Down;
+                        last_msg = format!("{}: DOWN (error sending request for url ({}))", service.name, health_url);
+                        let _ = e; // suppress unused
+                    }
                 }
-                Ok(resp) => (
-                    ServiceStatus::Down,
-                    format!("{}: DOWN (HTTP {})", service.name, resp.status()),
-                ),
-                Err(e) => (
-                    ServiceStatus::Down,
-                    format!("{}: DOWN ({})", service.name, e),
-                ),
-            };
+
+                if attempt < max_retries {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+
+            let (new_status, log_msg) = (last_status, last_msg);
 
             // Durum değiştiyse log + alert
             if service.status != new_status {

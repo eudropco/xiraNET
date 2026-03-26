@@ -138,8 +138,35 @@ async fn main() -> std::io::Result<()> {
             let health_interval = xira_config.health.interval_secs;
             let health_timeout = xira_config.health.timeout_secs;
             tokio::spawn(async move {
-                health::start_health_checker(health_registry, health_alerts, health_interval, health_timeout).await;
+                health::start_health_checker(
+                    health_registry, health_alerts, health_interval, health_timeout
+                ).await;
             });
+
+            // ═══ Startup Self-Test ═══
+            {
+                let svc_list = registry.list_all();
+                if !svc_list.is_empty() {
+                    tracing::info!("Running startup self-test for {} service(s)...", svc_list.len());
+                    let test_client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(3))
+                        .build().unwrap();
+                    for svc in &svc_list {
+                        let health_url = format!("{}{}", svc.upstream, svc.health_endpoint);
+                        match test_client.get(&health_url).send().await {
+                            Ok(resp) if resp.status().is_success() => {
+                                tracing::info!("  ✔ {} ({}) — UP", svc.name, svc.upstream);
+                            }
+                            Ok(resp) => {
+                                tracing::warn!("  ✘ {} ({}) — HTTP {}", svc.name, svc.upstream, resp.status());
+                            }
+                            Err(_) => {
+                                tracing::warn!("  ✘ {} ({}) — UNREACHABLE", svc.name, svc.upstream);
+                            }
+                        }
+                    }
+                }
+            }
 
             let start_time = Instant::now();
 
@@ -301,7 +328,19 @@ async fn main() -> std::io::Result<()> {
                 }
             }
 
-            server.run().await
+            // Graceful shutdown handler
+            let server_handle = server.run();
+            let srv = server_handle.handle();
+
+            // Ctrl+C handler
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c().await.ok();
+                tracing::info!("\n⚓ Graceful shutdown initiated — waiting for active connections...");
+                srv.stop(true).await;
+                tracing::info!("✔ Shutdown complete");
+            });
+
+            server_handle.await
         }
 
         Commands::GenerateCerts => {
