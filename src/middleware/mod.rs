@@ -6,3 +6,4 @@ pub mod jwt;
 pub mod ip_filter;
 pub mod oauth2;
 pub mod validation;
+pub mod redis_rate_limit;

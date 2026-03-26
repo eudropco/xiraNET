@@ -1,6 +1,6 @@
 [package]
 name = "xiranet"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 description = "xiraNET — Central Infrastructure Hub"
 authors = ["valverde"]
@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Web framework
-actix-web = { version = "4", features = ["rustls-0_23"] }
+actix-web = { version = "4", features = ["rustls-0_23", "compress-gzip", "compress-brotli", "compress-zstd"] }
 actix-rt = "2"
 actix-cors = "0.7"
 actix-ws = "0.3"
@@ -51,6 +51,7 @@ lazy_static = "1"
 bytes = "1"
 futures-util = "0.3"
 async-trait = "0.1"
+rand = "0.8"
 
 # SQLite persistence
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -85,3 +86,13 @@ libloading = "0.8"
 
 # WebSocket client (downstream proxy)
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# Redis (distributed rate limiting)
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+# OpenTelemetry (env-based, SDK optional)
+opentelemetry = { version = "0.27", optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+
+# Regex (body transform)
+regex = "1"

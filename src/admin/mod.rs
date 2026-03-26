@@ -1,4 +1,6 @@
 pub mod handlers;
+pub mod config_api;
+pub mod openapi;
 
 use actix_web::web;
 
@@ -19,5 +21,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/plugins", web::get().to(handlers::get_plugins))
             .route("/versions", web::get().to(crate::versioning::list_versions))
             .route("/log-stats", web::get().to(handlers::get_log_stats))
+            // v1.0 — New routes
+            .route("/config", web::get().to(config_api::get_config))
+            .route("/config", web::put().to(config_api::update_config))
+            .route("/docs", web::get().to(openapi::swagger_ui_handler))
+            .route("/docs/spec", web::get().to(openapi::openapi_handler))
     );
 }

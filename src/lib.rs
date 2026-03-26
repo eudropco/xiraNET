@@ -13,3 +13,6 @@ pub mod tls;
 pub mod versioning;
 pub mod dashboard;
 pub mod logging;
+pub mod grpc;
+pub mod discovery;
+pub mod telemetry;

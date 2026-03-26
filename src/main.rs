@@ -144,18 +144,68 @@ async fn main() -> std::io::Result<()> {
             let start_time = Instant::now();
 
             // Aktif özellikleri belirle
-            let mut features = vec!["Gateway", "Admin API", "Dashboard", "Prometheus", "SQLite"];
+            let mut features = vec!["Gateway", "Admin API", "Dashboard", "Prometheus", "SQLite", "Compression"];
             if xira_config.jwt.enabled { features.push("JWT"); }
             if xira_config.ip_filter.enabled { features.push("IP Filter"); }
             if xira_config.cache.enabled { features.push("Cache"); }
             if xira_config.alerting.enabled { features.push("Alerting"); }
             if xira_config.plugins.enabled { features.push("Plugins"); }
             if xira_config.tls.is_some() { features.push("TLS"); }
+            if xira_config.grpc.enabled { features.push("gRPC"); }
+            if xira_config.discovery.enabled { features.push("Discovery"); }
+            if xira_config.redis.enabled { features.push("Redis"); }
+            if xira_config.telemetry.enabled { features.push("OpenTelemetry"); }
 
             print_banner(&host, port, &features);
 
             // Retry config
             let retry_config = xira_config.retry.clone();
+
+            // gRPC Proxy
+            if xira_config.grpc.enabled {
+                let grpc_registry = Arc::new(registry.clone());
+                let grpc_host = host.clone();
+                let grpc_port = xira_config.grpc.port;
+                tokio::spawn(async move {
+                    xiranet::grpc::start_grpc_proxy(grpc_registry, grpc_host, grpc_port).await;
+                });
+                tracing::info!("gRPC proxy enabled on port {}", xira_config.grpc.port);
+            }
+
+            // Service Discovery
+            if xira_config.discovery.enabled {
+                let disc_registry = Arc::new(registry.clone());
+                let disc_backend = match xira_config.discovery.backend.as_str() {
+                    "consul" => xiranet::discovery::DiscoveryBackend::Consul {
+                        url: xira_config.discovery.consul_url.clone().unwrap_or_else(|| "http://localhost:8500".to_string()),
+                        datacenter: xira_config.discovery.consul_datacenter.clone(),
+                    },
+                    "dns" => xiranet::discovery::DiscoveryBackend::Dns {
+                        domain: xira_config.discovery.dns_domain.clone().unwrap_or_default(),
+                    },
+                    _ => xiranet::discovery::DiscoveryBackend::Static,
+                };
+                let disc_interval = xira_config.discovery.interval_secs;
+                tokio::spawn(async move {
+                    xiranet::discovery::start_discovery(disc_registry, disc_backend, disc_interval).await;
+                });
+            }
+
+            // OpenTelemetry
+            let _otel_guard = if xira_config.telemetry.enabled {
+                match xiranet::telemetry::init_opentelemetry(
+                    &xira_config.telemetry.otlp_endpoint,
+                    &xira_config.telemetry.service_name,
+                ) {
+                    Ok(guard) => Some(guard),
+                    Err(e) => {
+                        tracing::warn!("OpenTelemetry init failed: {} — running without tracing export", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             // Shared state
             let registry_data = web::Data::new(registry);
@@ -166,6 +216,7 @@ async fn main() -> std::io::Result<()> {
             let plugin_data = web::Data::new(plugin_manager);
             let retry_data = web::Data::new(retry_config);
             let storage_data = web::Data::new(storage_arc.clone());
+            let shared_config_data = web::Data::new(shared_config.clone());
 
             // JWT config
             let jwt_enabled = xira_config.jwt.enabled;
@@ -195,7 +246,9 @@ async fn main() -> std::io::Result<()> {
                     .app_data(plugin_data.clone())
                     .app_data(retry_data.clone())
                     .app_data(storage_data.clone())
+                    .app_data(shared_config_data.clone())
                     // Middleware (ters sırada uygulanır)
+                    .wrap(actix_web::middleware::Compress::default())
                     .wrap(cors::configure_cors())
                     .wrap(RequestLogger::with_storage(storage_for_logger.clone()))
                     .wrap(RateLimiter::new(rl_max, rl_window))

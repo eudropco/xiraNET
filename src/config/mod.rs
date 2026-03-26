@@ -37,6 +37,12 @@ pub struct XiraConfig {
     pub grpc: GrpcConfig,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
+    #[serde(default)]
+    pub discovery: DiscoveryConfig,
+    #[serde(default)]
+    pub redis: RedisConfig,
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -247,6 +253,47 @@ pub struct GrpcConfig {
 
 fn default_grpc_port() -> u16 { 9001 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DiscoveryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// "consul", "dns", "static"
+    #[serde(default = "default_discovery_backend")]
+    pub backend: String,
+    #[serde(default)]
+    pub consul_url: Option<String>,
+    #[serde(default)]
+    pub consul_datacenter: Option<String>,
+    #[serde(default)]
+    pub dns_domain: Option<String>,
+    #[serde(default = "default_discovery_interval")]
+    pub interval_secs: u64,
+}
+
+fn default_discovery_backend() -> String { "static".to_string() }
+fn default_discovery_interval() -> u64 { 30 }
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RedisConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TelemetryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_otel_endpoint")]
+    pub otlp_endpoint: String,
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+}
+
+fn default_otel_endpoint() -> String { "http://localhost:4317".to_string() }
+fn default_service_name() -> String { "xiranet".to_string() }
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServiceConfig {
     pub name: String,
@@ -337,6 +384,9 @@ impl Default for XiraConfig {
             plugins: PluginConfig::default(),
             grpc: GrpcConfig::default(),
             services: vec![],
+            discovery: DiscoveryConfig::default(),
+            redis: RedisConfig::default(),
+            telemetry: TelemetryConfig::default(),
         }
     }
 }

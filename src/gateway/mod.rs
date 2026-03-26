@@ -5,6 +5,8 @@ pub mod cache;
 pub mod load_balancer;
 pub mod websocket;
 pub mod transform;
+pub mod body_transform;
+pub mod canary;
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use crate::config::RetryConfig;
