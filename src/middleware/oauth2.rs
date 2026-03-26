@@ -140,9 +140,10 @@ where
                 }
                 Err(e) => {
                     tracing::error!("OAuth2 introspection failed: {}", e);
-                    // İntrospection başarısız olduğunda isteğe izin ver (fail-open)
-                    let res = fut.await?;
-                    Ok(res.map_into_left_body())
+                    // Fail-closed: introspection başarısız olduğunda isteği reddet
+                    Err(actix_web::error::ErrorServiceUnavailable(
+                        format!("OAuth2 introspection unavailable: {}", e)
+                    ))
                 }
             }
         })

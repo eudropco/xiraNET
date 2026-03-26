@@ -42,6 +42,15 @@ pub struct ServiceEntry {
     /// JSON Schema for request validation
     #[serde(default)]
     pub validation_schema: Option<String>,
+    /// Per-service IP whitelist
+    #[serde(default)]
+    pub ip_whitelist: Vec<String>,
+    /// Per-service IP blacklist
+    #[serde(default)]
+    pub ip_blacklist: Vec<String>,
+    /// Request/Response header transform rules
+    #[serde(default)]
+    pub transform: Option<crate::config::TransformConfig>,
 }
 
 impl ServiceEntry {
@@ -63,6 +72,9 @@ impl ServiceEntry {
             load_balance: None,
             version: None,
             validation_schema: None,
+            ip_whitelist: vec![],
+            ip_blacklist: vec![],
+            transform: None,
         }
     }
 
@@ -93,6 +105,12 @@ pub struct RegisterServiceRequest {
     pub version: Option<String>,
     #[serde(default)]
     pub validation_schema: Option<String>,
+    #[serde(default)]
+    pub ip_whitelist: Vec<String>,
+    #[serde(default)]
+    pub ip_blacklist: Vec<String>,
+    #[serde(default)]
+    pub transform: Option<crate::config::TransformConfig>,
 }
 
 fn default_health_ep() -> String {

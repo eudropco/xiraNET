@@ -101,7 +101,8 @@ impl CircuitBreakerManager {
                     }
                 }
                 CircuitState::Closed => {
-                    entry.failure_count = 0; // Başarılı istek failure count'u sıfırla
+                    // Closed state'te başarılı istekler failure_count'u etkilemez
+                    // Failure count sadece threshold aşımında sıfırlanır
                 }
                 _ => {}
             }

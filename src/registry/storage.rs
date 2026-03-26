@@ -134,6 +134,9 @@ impl SqliteStorage {
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 last_health_check: None,
                 request_count: request_count as u64,
+                ip_whitelist: vec![],
+                ip_blacklist: vec![],
+                transform: None,
             })
         })?;
 

@@ -82,3 +82,6 @@ tower = "0.5"
 
 # Plugin system
 libloading = "0.8"
+
+# WebSocket client (downstream proxy)
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }

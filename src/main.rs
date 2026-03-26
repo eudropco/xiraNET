@@ -88,6 +88,7 @@ async fn main() -> std::io::Result<()> {
             );
 
             // Service Registry (SQLite entegrasyonlu)
+            let storage_arc = storage.clone();
             let registry = ServiceRegistry::with_storage(storage);
             registry.load_from_config(&xira_config.services);
             let service_count = registry.count();
@@ -153,6 +154,9 @@ async fn main() -> std::io::Result<()> {
 
             print_banner(&host, port, &features);
 
+            // Retry config
+            let retry_config = xira_config.retry.clone();
+
             // Shared state
             let registry_data = web::Data::new(registry);
             let cb_data = web::Data::new(cb_manager);
@@ -160,6 +164,8 @@ async fn main() -> std::io::Result<()> {
             let cache_data = web::Data::new(response_cache);
             let start_data = web::Data::new(start_time);
             let plugin_data = web::Data::new(plugin_manager);
+            let retry_data = web::Data::new(retry_config);
+            let storage_data = web::Data::new(storage_arc.clone());
 
             // JWT config
             let jwt_enabled = xira_config.jwt.enabled;
@@ -176,6 +182,8 @@ async fn main() -> std::io::Result<()> {
             let rl_max = xira_config.rate_limit.max_requests;
             let rl_window = xira_config.rate_limit.window_secs;
 
+            let storage_for_logger = storage_arc.clone();
+
             let server = HttpServer::new(move || {
                 App::new()
                     // Shared state
@@ -185,9 +193,11 @@ async fn main() -> std::io::Result<()> {
                     .app_data(cache_data.clone())
                     .app_data(start_data.clone())
                     .app_data(plugin_data.clone())
+                    .app_data(retry_data.clone())
+                    .app_data(storage_data.clone())
                     // Middleware (ters sırada uygulanır)
                     .wrap(cors::configure_cors())
-                    .wrap(RequestLogger::new())
+                    .wrap(RequestLogger::with_storage(storage_for_logger.clone()))
                     .wrap(RateLimiter::new(rl_max, rl_window))
                     .wrap(JwtAuth::new(jwt_secret.clone(), &jwt_algo, jwt_issuer.clone(), jwt_enabled))
                     .wrap(IpFilter::new(ip_whitelist.clone(), ip_blacklist.clone(), ip_enabled))

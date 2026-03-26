@@ -91,23 +91,23 @@ impl LoadBalancer {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Bağlantı sayacını azalt
+    /// Bağlantı sayacını azalt (atomic)
     pub fn release_connection(&self, upstream: &str) {
         if let Some(counter) = self.connections.get(upstream) {
-            let prev = counter.load(Ordering::Relaxed);
-            if prev > 0 {
-                counter.store(prev - 1, Ordering::Relaxed);
-            }
+            // Atomic fetch_update: underflow'u önle
+            let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
+                if prev > 0 { Some(prev - 1) } else { None }
+            });
         }
     }
 }
 
-/// Basit random index (no external crate needed)
+/// Random index (hash-based, no external crate)
 fn rand_index(max: usize) -> usize {
-    use std::time::SystemTime;
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos() as usize;
-    nanos % max
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    std::time::Instant::now().hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
+    (hasher.finish() as usize) % max
 }

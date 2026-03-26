@@ -24,6 +24,7 @@ impl IpFilter {
         }
     }
 
+    #[allow(dead_code)]
     fn is_allowed(&self, ip: &str) -> bool {
         if !self.enabled {
             return true;

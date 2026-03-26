@@ -67,6 +67,9 @@ impl ServiceRegistry {
             entry.load_balance = svc.load_balance.clone();
             entry.version = svc.version.clone();
             entry.validation_schema = svc.validation_schema.clone();
+            entry.ip_whitelist = svc.ip_whitelist.clone();
+            entry.ip_blacklist = svc.ip_blacklist.clone();
+            entry.transform = svc.transform.clone();
 
             tracing::info!(
                 "Service registered from config: {} → {} (prefix: {})",
@@ -120,6 +123,9 @@ impl ServiceRegistry {
         entry.load_balance = req.load_balance;
         entry.version = req.version;
         entry.validation_schema = req.validation_schema;
+        entry.ip_whitelist = req.ip_whitelist;
+        entry.ip_blacklist = req.ip_blacklist;
+        entry.transform = req.transform;
 
         let result = entry.clone();
 

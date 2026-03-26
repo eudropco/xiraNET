@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -270,7 +270,7 @@ pub struct ServiceConfig {
     pub ip_blacklist: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct TransformConfig {
     #[serde(default)]
     pub add_request_headers: std::collections::HashMap<String, String>,

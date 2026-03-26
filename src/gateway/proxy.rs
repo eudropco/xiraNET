@@ -18,12 +18,37 @@ pub fn client() -> &'static Client {
     &HTTP_CLIENT
 }
 
-/// İsteği downstream servise ilet
-pub async fn forward_request(
+/// Proxy sonucu — raw bileşenler (cache için)
+pub struct ProxyResult {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+    pub is_error: bool,
+}
+
+impl ProxyResult {
+    /// ProxyResult'dan HttpResponse oluştur
+    pub fn into_response(self) -> HttpResponse {
+        let status = actix_web::http::StatusCode::from_u16(self.status)
+            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let mut response = HttpResponse::build(status);
+        for (k, v) in &self.headers {
+            response.insert_header((k.as_str(), v.as_str()));
+        }
+        response.insert_header(("X-Proxied-By", "xiraNET"));
+        response.insert_header(("X-Cache", "MISS"));
+        response.body(self.body)
+    }
+}
+
+const SKIP_HEADERS: [&str; 5] = ["host", "connection", "transfer-encoding", "keep-alive", "upgrade"];
+
+/// İsteği downstream servise ilet — raw bileşenler döndür
+pub async fn forward_request_raw(
     original_req: &HttpRequest,
     body: actix_web::web::Bytes,
     downstream_url: &str,
-) -> HttpResponse {
+) -> ProxyResult {
     let method = match original_req.method().as_str() {
         "GET" => reqwest::Method::GET,
         "POST" => reqwest::Method::POST,
@@ -33,19 +58,22 @@ pub async fn forward_request(
         "HEAD" => reqwest::Method::HEAD,
         "OPTIONS" => reqwest::Method::OPTIONS,
         _ => {
-            return HttpResponse::MethodNotAllowed().json(serde_json::json!({
-                "error": "Method not supported"
-            }));
+            let err_body = serde_json::to_vec(&serde_json::json!({"error": "Method not supported"})).unwrap_or_default();
+            return ProxyResult {
+                status: 405,
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: err_body,
+                is_error: true,
+            };
         }
     };
 
     let mut forwarded = HTTP_CLIENT.request(method, downstream_url);
 
     // Header'ları ilet
-    let skip_headers = ["host", "connection", "transfer-encoding", "keep-alive", "upgrade"];
     for (key, value) in original_req.headers().iter() {
         let key_str = key.as_str().to_lowercase();
-        if !skip_headers.contains(&key_str.as_str()) {
+        if !SKIP_HEADERS.contains(&key_str.as_str()) {
             if let Ok(val_str) = value.to_str() {
                 forwarded = forwarded.header(key.as_str(), val_str);
             }
@@ -70,40 +98,59 @@ pub async fn forward_request(
 
     match forwarded.send().await {
         Ok(resp) => {
-            let status = actix_web::http::StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR);
+            let status = resp.status().as_u16();
 
-            let mut response = HttpResponse::build(status);
-
-            for (key, value) in resp.headers().iter() {
-                let key_str = key.as_str().to_lowercase();
-                if !skip_headers.contains(&key_str.as_str()) {
-                    if let Ok(val_str) = value.to_str() {
-                        response.insert_header((key.as_str(), val_str));
-                    }
-                }
-            }
-
-            response.insert_header(("X-Proxied-By", "xiraNET"));
-            response.insert_header(("X-Cache", "MISS"));
+            let headers: Vec<(String, String)> = resp.headers().iter()
+                .filter(|(k, _)| !SKIP_HEADERS.contains(&k.as_str()))
+                .filter_map(|(k, v)| {
+                    v.to_str().ok().map(|val| (k.to_string(), val.to_string()))
+                })
+                .collect();
 
             match resp.bytes().await {
-                Ok(bytes) => response.body(bytes.to_vec()),
+                Ok(bytes) => ProxyResult {
+                    status,
+                    headers,
+                    body: bytes.to_vec(),
+                    is_error: false,
+                },
                 Err(e) => {
                     tracing::error!("Failed to read response body: {}", e);
-                    HttpResponse::BadGateway().json(serde_json::json!({
+                    let err_body = serde_json::to_vec(&serde_json::json!({
                         "error": "Failed to read upstream response",
                         "detail": e.to_string()
-                    }))
+                    })).unwrap_or_default();
+                    ProxyResult {
+                        status: 502,
+                        headers: vec![("content-type".to_string(), "application/json".to_string())],
+                        body: err_body,
+                        is_error: true,
+                    }
                 }
             }
         }
         Err(e) => {
             tracing::error!("Proxy error to {}: {}", downstream_url, e);
-            HttpResponse::BadGateway().json(serde_json::json!({
+            let err_body = serde_json::to_vec(&serde_json::json!({
                 "error": "Service unavailable",
                 "detail": e.to_string()
-            }))
+            })).unwrap_or_default();
+            ProxyResult {
+                status: 502,
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: err_body,
+                is_error: true,
+            }
         }
     }
 }
+
+/// İsteği downstream servise ilet (eski uyumlu interface)
+pub async fn forward_request(
+    original_req: &HttpRequest,
+    body: actix_web::web::Bytes,
+    downstream_url: &str,
+) -> HttpResponse {
+    forward_request_raw(original_req, body, downstream_url).await.into_response()
+}
+
