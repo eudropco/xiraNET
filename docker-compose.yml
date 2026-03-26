@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  xiranet:
+    build: .
+    container_name: xiranet-gateway
+    ports:
+      - "9000:9000"   # HTTP Gateway
+      - "9001:9001"   # gRPC (optional)
+    volumes:
+      - ./xiranet.toml:/app/xiranet.toml:ro
+      - xiranet-data:/app/data
+      - xiranet-logs:/app/logs
+      - ./certs:/app/certs:ro
+      - ./plugins:/app/plugins:ro
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/xira/health", "-H", "X-Api-Key: xira-secret-key-change-me"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - xiranet
+
+  # Prometheus (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: xiranet-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - xiranet
+    networks:
+      - xiranet
+    profiles:
+      - monitoring
+
+  # Grafana (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: xiranet-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=xira
+    depends_on:
+      - prometheus
+    networks:
+      - xiranet
+    profiles:
+      - monitoring
+
+volumes:
+  xiranet-data:
+  xiranet-logs:
+
+networks:
+  xiranet:
+    driver: bridge

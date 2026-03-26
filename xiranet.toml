@@ -1,0 +1,89 @@
+[gateway]
+host = "0.0.0.0"
+port = 9000
+workers = 4
+
+[admin]
+api_key = "xira-secret-key-change-me"
+enabled = true
+
+[health]
+interval_secs = 30
+timeout_secs = 5
+
+# [tls]
+# enabled = false
+# cert_path = "certs/server-cert.pem"
+# key_path = "certs/server-key.pem"
+# mtls_enabled = false
+# client_ca_path = "certs/ca-cert.pem"
+
+[metrics]
+enabled = true
+path = "/metrics"
+
+[logging]
+file_enabled = true
+file_path = "logs/xiranet.log"
+rotation = "daily"
+level = "info"
+
+[alerting]
+enabled = false
+# webhook_url = "https://hooks.slack.com/services/xxx"
+on_service_down = true
+on_service_up = true
+
+[rate_limit]
+max_requests = 100
+window_secs = 60
+
+[cache]
+enabled = true
+ttl_secs = 300
+max_entries = 1000
+
+[jwt]
+enabled = false
+secret = "your-jwt-secret-key-here"
+algorithm = "HS256"
+# issuer = "xiraNET"
+
+[oauth2]
+enabled = false
+# introspection_url = "https://auth.example.com/oauth2/introspect"
+# client_id = "xiranet"
+# client_secret = "secret"
+
+[ip_filter]
+enabled = false
+whitelist = []
+blacklist = []
+
+[circuit_breaker]
+failure_threshold = 5
+reset_timeout_secs = 30
+half_open_max_requests = 3
+
+[retry]
+max_retries = 3
+delay_ms = 100
+backoff_multiplier = 2.0
+
+[plugins]
+enabled = true
+directory = "plugins"
+
+[grpc]
+enabled = false
+port = 9001
+
+# Servis tanımları
+# [[services]]
+# name = "example-api"
+# prefix = "/api"
+# upstream = "http://localhost:3001"
+# health_endpoint = "/health"
+# upstreams = ["http://localhost:3001", "http://localhost:3002"]
+# load_balance = "round-robin"
+# version = "1"
