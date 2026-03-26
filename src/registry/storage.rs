@@ -281,4 +281,46 @@ impl SqliteStorage {
             "error_count_5xx": error_count,
         }))
     }
+
+    /// Raw SQL çalıştır (CREATE TABLE, INSERT, UPDATE, DELETE)
+    pub fn execute_raw(&self, sql: &str) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(sql).map(|_| 0)
+    }
+
+    /// Raw SQL sorgusu çalıştır (SELECT) — Vec<serde_json::Value> döndürür
+    pub fn query_raw(&self, sql: &str) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql)?;
+        let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+
+        let rows = stmt.query_map([], |row| {
+            let mut obj = serde_json::Map::new();
+            for (i, col) in columns.iter().enumerate() {
+                let val: rusqlite::Result<String> = row.get(i);
+                match val {
+                    Ok(s) => { obj.insert(col.clone(), serde_json::Value::String(s)); },
+                    Err(_) => {
+                        // Try as integer
+                        if let Ok(n) = row.get::<_, i64>(i) {
+                            obj.insert(col.clone(), serde_json::json!(n));
+                        } else if let Ok(f) = row.get::<_, f64>(i) {
+                            obj.insert(col.clone(), serde_json::json!(f));
+                        } else {
+                            obj.insert(col.clone(), serde_json::Value::Null);
+                        }
+                    }
+                }
+            }
+            Ok(serde_json::Value::Object(obj))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            if let Ok(v) = row {
+                result.push(v);
+            }
+        }
+        Ok(result)
+    }
 }

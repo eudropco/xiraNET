@@ -11,3 +11,7 @@ pub mod waf;
 pub mod api_keys;
 pub mod tenant;
 pub mod oauth2_gateway;
+pub mod bot_detect;
+pub mod audit_log;
+pub mod cors_manager;
+pub mod geoip;

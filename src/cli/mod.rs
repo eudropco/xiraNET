@@ -110,6 +110,43 @@ pub enum Commands {
         #[arg(short, long, default_value = "10")]
         concurrency: usize,
     },
+    /// Yeni proje için xiranet.toml template oluştur
+    Init,
+    /// Sistem bağımlılıkları kontrol (port, SQLite, network)
+    Doctor {
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+    },
+    /// Tüm config + servisleri JSON'a export et
+    Export {
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, default_value = "xira-secret-key-change-me")]
+        key: String,
+        /// Çıktı dosyası
+        #[arg(short, long, default_value = "xiranet-export.json")]
+        output: String,
+    },
+    /// JSON'dan servisleri toplu import et
+    Import {
+        /// JSON dosya yolu
+        file: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, default_value = "xira-secret-key-change-me")]
+        key: String,
+    },
+    /// Belirli servise test request gönder
+    ProxyTest {
+        /// Test URL (ör: /api/health)
+        path: String,
+        #[arg(short, long, default_value = "GET")]
+        method: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, default_value = "xira-secret-key-change-me")]
+        key: String,
+    },
 }
 
 impl Cli {
@@ -400,6 +437,197 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
         }
 
         Commands::Serve { .. } | Commands::GenerateCerts => {}
+
+        // ═══ v1.0.3 — New CLI Commands ═══
+
+        Commands::Init => {
+            let template = r#"# xiraNET Configuration
+[gateway]
+host = "0.0.0.0"
+port = 9000
+workers = 4
+
+[rate_limit]
+max_requests = 100
+window_secs = 60
+
+[health]
+interval_secs = 30
+timeout_secs = 5
+
+[cache]
+enabled = true
+ttl_secs = 300
+max_entries = 1000
+
+[jwt]
+enabled = false
+secret = "change-me"
+
+[auth]
+api_key = "xira-secret-key-change-me"
+
+[alerting]
+enabled = false
+
+[plugins]
+enabled = true
+directory = "plugins"
+
+[grpc]
+enabled = false
+port = 9001
+
+[[services]]
+name = "my-api"
+prefix = "/api"
+upstream = "http://localhost:3001"
+health_endpoint = "/health"
+"#;
+            if std::path::Path::new("xiranet.toml").exists() {
+                println!("⚠️  xiranet.toml already exists! Use --force to overwrite.");
+            } else {
+                std::fs::write("xiranet.toml", template).expect("Failed to write");
+                println!("✅ xiranet.toml created!");
+                println!("   Edit the file, then run: xira serve");
+            }
+        }
+
+        Commands::Doctor { gateway } => {
+            println!("🩺 xiraNET Doctor\n");
+
+            // Port check
+            print!("  Port 9000:     ");
+            match std::net::TcpStream::connect("127.0.0.1:9000") {
+                Ok(_) => println!("🟢 IN USE (gateway running)"),
+                Err(_) => println!("⚪ AVAILABLE"),
+            }
+
+            // Config check
+            print!("  Config:        ");
+            if std::path::Path::new("xiranet.toml").exists() {
+                println!("🟢 Found (xiranet.toml)");
+            } else {
+                println!("🔴 Not found (run: xira init)");
+            }
+
+            // SQLite check
+            print!("  SQLite:        ");
+            if std::path::Path::new("data/xiranet.db").exists() {
+                println!("🟢 Found (data/xiranet.db)");
+            } else {
+                println!("⚪ Will be created on first run");
+            }
+
+            // Gateway connectivity
+            print!("  Gateway API:   ");
+            match reqwest::Client::new().get(&format!("{}/xira/health", gateway)).send().await {
+                Ok(resp) if resp.status().is_success() => println!("🟢 Healthy"),
+                Ok(resp) => println!("🟡 Responding (HTTP {})", resp.status()),
+                Err(_) => println!("🔴 Unreachable ({})", gateway),
+            }
+
+            // Logs directory
+            print!("  Logs dir:      ");
+            if std::path::Path::new("logs").exists() {
+                println!("🟢 Found");
+            } else {
+                println!("⚪ Will be created on first run");
+            }
+
+            println!("\n  Version:       v{}", env!("CARGO_PKG_VERSION"));
+        }
+
+        Commands::Export { gateway, key, output } => {
+            println!("📦 Exporting from {} ...", gateway);
+
+            let mut export = serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "exported_at": chrono::Utc::now().to_rfc3339()});
+
+            if let Ok(resp) = client.get(&format!("{}/xira/services", gateway)).header("X-Api-Key", key.as_str()).send().await {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    export["services"] = body;
+                }
+            }
+            if let Ok(resp) = client.get(&format!("{}/xira/config", gateway)).header("X-Api-Key", key.as_str()).send().await {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    export["config"] = body;
+                }
+            }
+
+            std::fs::write(&output, serde_json::to_string_pretty(&export)?)?;
+            println!("✅ Exported to {}", output);
+        }
+
+        Commands::Import { file, gateway, key } => {
+            println!("📥 Importing from {} ...", file);
+            let content = std::fs::read_to_string(&file)?;
+            let data: serde_json::Value = serde_json::from_str(&content)?;
+
+            if let Some(services) = data.get("services").and_then(|s| s.get("data")).and_then(|d| d.get("services")).and_then(|s| s.as_array()) {
+                let mut imported = 0;
+                for svc in services {
+                    let name = svc.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                    let prefix = svc.get("prefix").and_then(|p| p.as_str()).unwrap_or("/");
+                    let upstream = svc.get("upstream").and_then(|u| u.as_str()).unwrap_or("");
+
+                    if upstream.is_empty() { continue; }
+
+                    match client.post(&format!("{}/xira/services", gateway))
+                        .header("X-Api-Key", key.as_str())
+                        .json(&serde_json::json!({"name": name, "prefix": prefix, "upstream": upstream, "health_endpoint": "/health"}))
+                        .send().await {
+                        Ok(_) => { imported += 1; println!("  ✅ {} → {}", prefix, upstream); },
+                        Err(e) => println!("  ❌ {} — {}", name, e),
+                    }
+                }
+                println!("\n📦 Imported {} services", imported);
+            } else {
+                println!("❌ No services found in import file");
+            }
+        }
+
+        Commands::ProxyTest { path, method, gateway, key } => {
+            let url = format!("{}{}", gateway, path);
+            println!("🧪 Testing {} {} ...\n", method, url);
+
+            let start = std::time::Instant::now();
+            let resp = match method.to_uppercase().as_str() {
+                "POST" => client.post(&url).header("X-Api-Key", key.as_str()).send().await,
+                "PUT" => client.put(&url).header("X-Api-Key", key.as_str()).send().await,
+                "DELETE" => client.delete(&url).header("X-Api-Key", key.as_str()).send().await,
+                _ => client.get(&url).header("X-Api-Key", key.as_str()).send().await,
+            };
+            let duration = start.elapsed();
+
+            match resp {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let headers: Vec<(String, String)> = resp.headers().iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("-").to_string()))
+                        .collect();
+                    let body = resp.text().await.unwrap_or_default();
+
+                    let icon = if status.is_success() { "🟢" } else if status.is_client_error() { "🟡" } else { "🔴" };
+                    println!("  {} Status:   {}", icon, status);
+                    println!("  ⏱ Duration:  {:.2}ms", duration.as_secs_f64() * 1000.0);
+                    println!("  📏 Body:     {} bytes", body.len());
+
+                    // Key response headers
+                    for (k, v) in &headers {
+                        if k.starts_with("x-") || k == "content-type" {
+                            println!("  📎 {}: {}", k, v);
+                        }
+                    }
+
+                    if body.len() < 500 {
+                        println!("\n  Response:\n  {}", body);
+                    } else {
+                        println!("\n  Response (first 500 chars):\n  {}...", &body[..500]);
+                    }
+                },
+                Err(e) => println!("  🔴 Error: {}", e),
+            }
+        }
     }
     Ok(())
 }

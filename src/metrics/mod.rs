@@ -1,5 +1,6 @@
 pub mod sla;
 pub mod trace_collector;
+pub mod advanced;
 
 use actix_web::{HttpResponse, HttpRequest};
 use prometheus::{
