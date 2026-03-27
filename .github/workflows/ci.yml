@@ -44,9 +44,8 @@ jobs:
       - name: Run unit + integration tests
         run: cargo test --test integration_tests
 
-      - name: Clippy lint
+      - name: Clippy lint (fail on warnings)
         run: cargo clippy -- -D warnings
-        continue-on-error: true
 
   docker:
     name: Docker Build
@@ -60,5 +59,10 @@ jobs:
       - name: Build Docker image
         run: docker build -t xiranet:latest .
 
-      - name: Verify Docker image
-        run: docker run --rm xiranet:latest --version || true
+      - name: Verify Docker image starts
+        run: |
+          docker run -d --name xira-test -p 9000:9000 xiranet:latest
+          sleep 5
+          docker logs xira-test
+          docker stop xira-test
+          docker rm xira-test

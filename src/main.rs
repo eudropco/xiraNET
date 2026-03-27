@@ -103,9 +103,18 @@ async fn main() -> std::io::Result<()> {
             let workers = xira_config.gateway.workers;
             let api_key = xira_config.admin.api_key.clone();
 
-            // SQLite Storage
+            // ⚠️ Default key guard — warn loudly in production
+            if api_key == "xira-default-key" || api_key == "xira-secret-key-change-me" {
+                tracing::warn!("═══════════════════════════════════════════════════════════");
+                tracing::warn!("⚠️  SECURITY WARNING: Using default admin API key!");
+                tracing::warn!("⚠️  Change [admin].api_key in your config before deploying.");
+                tracing::warn!("═══════════════════════════════════════════════════════════");
+            }
+
+            // SQLite Storage (path from config or default)
+            let db_path = std::env::var("XIRA_DB_PATH").unwrap_or_else(|_| "data/xiranet.db".to_string());
             let storage = Arc::new(
-                SqliteStorage::new("data/xiranet.db").expect("Failed to init SQLite")
+                SqliteStorage::new(&db_path).expect("Failed to init SQLite")
             );
 
             // Service Registry (SQLite entegrasyonlu)

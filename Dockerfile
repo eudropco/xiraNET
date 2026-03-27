@@ -19,7 +19,7 @@ RUN cargo build --release
 # Runtime image
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -32,9 +32,10 @@ RUN mkdir -p /app/data /app/logs /app/plugins /app/certs
 EXPOSE 9000 9001
 
 ENV RUST_LOG=info
+ENV XIRA_ADMIN_KEY=xira-secret-key-change-me
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9000/xira/health -H "X-Api-Key: xira-secret-key-change-me" || exit 1
+    CMD curl -f http://localhost:9000/xira/health -H "X-Api-Key: ${XIRA_ADMIN_KEY}" || exit 1
 
 ENTRYPOINT ["xiranet"]
 CMD ["serve", "--config", "/app/xiranet.toml"]

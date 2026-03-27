@@ -9,7 +9,7 @@
     ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   
 ```
 
-**v2.0.0** — Production-grade API Gateway + Identity + Automation + Observability + Deployment + Security
+**v2.1.0** — Production-grade API Gateway + Identity + Automation + Observability + Deployment + Security
 
 Tüm projelerinizi tek bir merkezden yönetin. Runtime'da servis bağlayın, WAF/Bot koruması, SLA izleme, cron otomasyonu ve olay yönetimi tek yerden.
 
