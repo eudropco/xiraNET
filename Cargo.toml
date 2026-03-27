@@ -1,6 +1,6 @@
 [package]
 name = "xiranet"
-version = "1.0.3"
+version = "2.0.0"
 edition = "2021"
 description = "xiraNET — Central Infrastructure Hub"
 authors = ["valverde"]
@@ -96,4 +96,3 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 
 # Regex (body transform)
 regex = "1"
-

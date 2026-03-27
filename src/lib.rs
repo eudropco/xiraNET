@@ -16,3 +16,11 @@ pub mod logging;
 pub mod grpc;
 pub mod discovery;
 pub mod telemetry;
+
+// v2.0.0 — New Domains
+pub mod identity;
+pub mod automation;
+pub mod observability;
+pub mod dbgateway;
+pub mod deployment;
+pub mod datapipeline;
