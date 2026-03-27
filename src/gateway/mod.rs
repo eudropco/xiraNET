@@ -43,6 +43,7 @@ pub async fn gateway_handler(
     audit_logger: web::Data<Arc<crate::middleware::audit_log::AuditLogger>>,
     adv_metrics: web::Data<Arc<crate::metrics::advanced::AdvancedMetrics>>,
     health_scorer: web::Data<Arc<crate::gateway::health_scoring::HealthScorer>>,
+    event_bus: web::Data<Arc<crate::automation::event_bus::EventBus>>,
 ) -> HttpResponse {
     let request_start = std::time::Instant::now();
     let path = req.path().to_string();
@@ -441,6 +442,22 @@ pub async fn gateway_handler(
             duration_ms,
             body_size,
             response_size,
+        });
+    }
+
+    // ═══ [EVENT BUS] Publish request.completed event ═══
+    {
+        let bus = event_bus.clone();
+        let ev_method = method.clone();
+        let ev_path = path.clone();
+        let ev_service = service_name_for_metrics.clone();
+        let ev_status = status_code;
+        let ev_latency = duration_ms;
+        tokio::spawn(async move {
+            bus.publish("request.completed", &ev_service, serde_json::json!({
+                "method": ev_method, "path": ev_path,
+                "status": ev_status, "latency_ms": ev_latency,
+            })).await;
         });
     }
 

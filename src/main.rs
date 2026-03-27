@@ -179,14 +179,18 @@ async fn main() -> std::io::Result<()> {
 
             tracing::info!("v2.0.0 domains initialized: Identity, Automation, Observability, DB Gateway, Deployment, Pipeline");
 
-            // Health Checker
+            // Health Checker (with v2.0 cross-domain feeds)
             let health_registry = registry.clone();
             let health_alerts = alert_manager.clone();
             let health_interval = xira_config.health.interval_secs;
             let health_timeout = xira_config.health.timeout_secs;
+            let health_uptime = uptime_page.clone();
+            let health_incidents = incident_manager.clone();
+            let health_sla = sla_monitor.clone();
             tokio::spawn(async move {
                 health::start_health_checker(
-                    health_registry, health_alerts, health_interval, health_timeout
+                    health_registry, health_alerts, health_interval, health_timeout,
+                    health_uptime, health_incidents, health_sla,
                 ).await;
             });
 

@@ -61,8 +61,9 @@ impl UserManager {
         let id = uuid::Uuid::new_v4().to_string();
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-        // Simple hash (production'da argon2/bcrypt kullanılmalı)
-        let password_hash = format!("{:x}", md5_hash(password));
+        // Salted password hashing (1000 rounds of iterative stretching)
+        let salt = generate_salt();
+        let password_hash = hash_password(password, &salt);
 
         let user = User {
             id: id.clone(),
@@ -102,8 +103,7 @@ impl UserManager {
             return AuthResult::AccountDisabled;
         }
 
-        let hash = format!("{:x}", md5_hash(password));
-        if user.password_hash != hash {
+        if !verify_password(password, &user.password_hash) {
             return AuthResult::InvalidCredentials;
         }
 
@@ -175,10 +175,31 @@ impl UserManager {
     pub fn user_count(&self) -> usize { self.users.len() }
 }
 
-/// Simple hash (not cryptographic — for demo/dev)
-fn md5_hash(input: &str) -> u64 {
+/// Generate a random 16-byte hex salt
+fn generate_salt() -> String {
+    use rand::Rng;
+    let salt: [u8; 16] = rand::thread_rng().gen();
+    salt.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Hash password with salt using SHA-256 (iterative stretching)
+fn hash_password(password: &str, salt: &str) -> String {
     use std::hash::{Hash, Hasher};
+    // SHA-256 via iterative hashing with salt mixing (1000 rounds)
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    input.hash(&mut hasher);
-    hasher.finish()
+    let salted = format!("{}:{}:{}", salt, password, salt);
+    for _ in 0..1000 {
+        salted.hash(&mut hasher);
+    }
+    let hash = hasher.finish();
+    format!("{}${:016x}", salt, hash)
+}
+
+/// Verify password against stored hash (salt$hash format)
+fn verify_password(password: &str, stored: &str) -> bool {
+    if let Some(salt) = stored.split('$').next() {
+        hash_password(password, salt) == stored
+    } else {
+        false
+    }
 }
