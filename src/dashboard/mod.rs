@@ -12,7 +12,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>xiraNET Dashboard v2.1</title>
+<title>xiraNET Dashboard v3.0</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -146,6 +146,37 @@ tr{cursor:pointer}
 <div style="padding:.8rem" id="featuresPanel"></div>
 </div>
 </div>
+<!-- v2.0.0 Panels -->
+<div class="grid-2">
+<div class="section">
+<div class="section-header"><h2>🛡️ Security</h2></div>
+<div style="padding:.8rem" id="securityPanel"><span style="color:var(--text2);font-size:.8rem">Loading...</span></div>
+</div>
+<div class="section">
+<div class="section-header"><h2>📊 SLA Monitor</h2></div>
+<div style="padding:.8rem" id="slaPanel"><span style="color:var(--text2);font-size:.8rem">Loading...</span></div>
+</div>
+</div>
+<div class="grid-2">
+<div class="section">
+<div class="section-header"><h2>🌐 Uptime Status</h2><span class="badge" id="uptimeStatus">—</span></div>
+<table>
+<thead><tr><th>Service</th><th>Status</th><th>Uptime</th><th>Response</th></tr></thead>
+<tbody id="uptimeTable"><tr><td colspan="4" style="text-align:center;color:var(--text2)">Loading...</td></tr></tbody>
+</table>
+</div>
+<div class="section">
+<div class="section-header"><h2>🚨 Active Incidents</h2><span class="badge" id="incidentCount">0</span></div>
+<div style="padding:.8rem" id="incidentsPanel"><span style="color:var(--text2);font-size:.8rem">No incidents</span></div>
+</div>
+</div>
+<div class="section">
+<div class="section-header"><h2>📈 Advanced Metrics</h2></div>
+<table>
+<thead><tr><th>Service</th><th>Requests</th><th>Error Rate</th><th>2xx</th><th>5xx</th><th>Bandwidth In</th></tr></thead>
+<tbody id="metricsTable"><tr><td colspan="6" style="text-align:center;color:var(--text2)">Loading...</td></tr></tbody>
+</table>
+</div>
 </div>
 <div class="modal" id="addModal">
 <div class="modal-content">
@@ -199,7 +230,7 @@ function initChart(){
   reqChart=new Chart(ctx,{type:'line',data:{labels:Array(MAX_POINTS).fill(''),datasets:[{label:'req/s',data:Array(MAX_POINTS).fill(0),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.1)',fill:true,tension:.4,pointRadius:0,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{beginAtZero:true,grid:{color:isDark?'#1e293b':'#e2e8f0'},ticks:{color:isDark?'#94a3b8':'#64748b',font:{size:10}}}}}});
 }
 
-function loadAll(){loadStats();loadServices();loadEvents();loadCBs();loadConfig()}
+function loadAll(){loadStats();loadServices();loadEvents();loadCBs();loadConfig();loadSecurity();loadUptime();loadIncidents();loadSLA();loadAdvMetrics()}
 
 function loadStats(){api('/xira/stats').then(d=>{if(d&&d.data)updateStats(d.data)})}
 
@@ -245,7 +276,71 @@ function loadConfig(){api('/xira/config').then(d=>{if(!d)return;
 document.getElementById('featuresPanel').innerHTML=`
 <div style="margin-bottom:.4rem;color:var(--text2);font-size:.7rem">Features</div>
 <div><span class="feature-tag">Compression</span><span class="feature-tag">Prometheus</span><span class="feature-tag">SQLite</span><span class="feature-tag">Request-ID</span>${d.cache&&d.cache.enabled?'<span class="feature-tag">Cache</span>':''}${d.jwt&&d.jwt.enabled?'<span class="feature-tag">JWT</span>':''}</div>
-<div style="margin-top:.6rem;font-size:.7rem;color:var(--text2)">v${d.version||'1.0.1'} | <a href="/xira/docs" style="color:var(--accent)">API Docs</a> | <a href="/metrics" style="color:var(--accent)">Metrics</a></div>`}).catch(()=>{})}
+<div style="margin-top:.6rem;font-size:.7rem;color:var(--text2)">v${d.version||'2.0.0'} | <a href="/xira/docs" style="color:var(--accent)">API Docs</a> | <a href="/metrics" style="color:var(--accent)">Metrics</a> | <a href="/xira/observability/uptime" style="color:var(--accent)">Status Page</a></div>`}).catch(()=>{})}
+
+function loadSecurity(){
+  Promise.all([api('/xira/security/waf'),api('/xira/security/bots'),api('/xira/security/audit?limit=5')]).then(([waf,bots,audit])=>{
+    const w=waf?.waf||{};const b=bots?.bots||{};const a=audit?.stats||{};
+    document.getElementById('securityPanel').innerHTML=`
+<div class="detail-row"><span class="detail-label">WAF</span><span><span class="status-badge ${w.enabled?'status-up':'status-down'}">${w.enabled?'Active':'Off'}</span> Mode: ${w.mode||'—'}</span></div>
+<div class="detail-row"><span class="detail-label">Bot Detector</span><span>Tracked: ${b.total_tracked_ips||0} | Bots: ${b.detected_bots||0} | Humans: ${b.humans||0}</span></div>
+<div class="detail-row"><span class="detail-label">Audit Log</span><span>Total: ${a.total||0} | Unique IPs: ${a.unique_ips||0}</span></div>`;
+  }).catch(()=>{})}
+
+function loadUptime(){
+  api('/xira/observability/uptime').then(d=>{
+    if(!d)return;
+    document.getElementById('uptimeStatus').textContent=d.status||'—';
+    const svcs=d.services||[];
+    document.getElementById('uptimeTable').innerHTML=svcs.length?svcs.map(s=>`<tr>
+<td>${s.name}</td>
+<td><span class="status-badge ${s.status==='Operational'?'status-up':'status-down'}">${s.status}</span></td>
+<td>${s.uptime}</td>
+<td><span class="latency-badge ${s.response_ms<100?'latency-fast':s.response_ms<500?'latency-mid':'latency-slow'}">${s.response_ms?.toFixed(0)||'—'}ms</span></td>
+</tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text2)">No services monitored</td></tr>';
+  }).catch(()=>{})}
+
+function loadIncidents(){
+  api('/xira/observability/incidents').then(d=>{
+    if(!d)return;
+    const active=d.active||[];
+    document.getElementById('incidentCount').textContent=d.active_count||0;
+    document.getElementById('incidentsPanel').innerHTML=active.length?active.map(i=>`
+<div style="border:1px solid var(--border);border-radius:6px;padding:.5rem;margin-bottom:.4rem">
+<div style="display:flex;justify-content:space-between;align-items:center">
+<strong style="font-size:.8rem">${i.title}</strong>
+<span class="status-badge ${i.severity==='Critical'?'status-down':i.severity==='Major'?'status-down':'status-unknown'}">${i.severity}</span>
+</div>
+<div style="font-size:.7rem;color:var(--text2);margin-top:.2rem">Status: ${i.status} | Services: ${(i.affected_services||[]).join(', ')}</div>
+</div>`).join(''):'<span style="color:var(--text2);font-size:.8rem">✅ No active incidents</span>';
+  }).catch(()=>{})}
+
+function loadSLA(){
+  api('/xira/sla').then(d=>{
+    if(!d)return;
+    const metrics=d.sla||[];
+    const violations=d.violations||[];
+    document.getElementById('slaPanel').innerHTML=metrics.length?metrics.map(m=>`
+<div class="detail-row"><span class="detail-label">${m.service_name}</span>
+<span>Uptime: <strong style="color:${m.uptime_percent>=99.9?'var(--green)':'var(--red)}">${m.uptime_percent?.toFixed(2)}%</strong> | P99: ${m.latency_p99?.toFixed(0)}ms | Checks: ${m.total_checks} | Violations: ${m.sla_violations}</span>
+</div>`).join('')+(violations.length?'<div style="margin-top:.4rem;font-size:.7rem;color:var(--red)">⚠️ '+violations.map(v=>v[0]+': '+v[1]).join(' | ')+'</div>':''):'<span style="color:var(--text2);font-size:.8rem">No SLA data yet</span>';
+  }).catch(()=>{})}
+
+function loadAdvMetrics(){
+  api('/xira/advanced-metrics').then(d=>{
+    if(!d)return;
+    const svcs=d.services||[];
+    document.getElementById('metricsTable').innerHTML=svcs.length?svcs.map(s=>`<tr>
+<td><strong>${s.service}</strong></td>
+<td>${(s.requests||0).toLocaleString()}</td>
+<td><span style="color:${(s.error_rate||0)>0.05?'var(--red)':'var(--green)}">${((s.error_rate||0)*100).toFixed(1)}%</span></td>
+<td style="color:var(--green)">${s['2xx']||0}</td>
+<td style="color:var(--red)">${s['5xx']||0}</td>
+<td>${formatBytes(s.bytes_in||0)}</td>
+</tr>`).join(''):'<tr><td colspan="6" style="text-align:center;color:var(--text2)">No traffic yet</td></tr>';
+  }).catch(()=>{})}
+
+function formatBytes(b){if(!b)return '0 B';const k=1024;const s=['B','KB','MB','GB'];const i=Math.floor(Math.log(b)/Math.log(k));return (b/Math.pow(k,i)).toFixed(1)+' '+s[i]}
 
 function addService(){const n=document.getElementById('svcName').value,p=document.getElementById('svcPrefix').value,u=document.getElementById('svcUpstream').value;if(!n||!p||!u)return;api('/xira/services',{method:'POST',body:JSON.stringify({name:n,prefix:p,upstream:u,health_endpoint:'/health'})}).then(()=>{hideAddModal();loadAll()})}
 function removeSvc(id){if(!confirm('Remove?'))return;api('/xira/services/'+id,{method:'DELETE'}).then(()=>loadAll())}
