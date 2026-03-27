@@ -53,17 +53,17 @@ xira health   # Sağlık durumu
                     ├─────────────────────────────────────────────────────┤
                     │                                                     │
   Request ──────►   │  WAF ► Bot Detection ► IP Filter ► Validation       │
-                    │     ► Circuit Breaker ► Cache ► Load Balancer        │
+                    │     ► Circuit Breaker ► Cache ► Load Balancer       │
                     │     ► Transform ► Retry/Proxy ► Metrics             │
-                    │     ► Health Scoring ► Audit Log ► EventBus          │
+                    │     ► Health Scoring ► Audit Log ► EventBus         │
                     │                                                     │
-  Response ◄────   │                                                     │
+  Response ◄────    │                                                     │
                     ├─────────────┬──────────────┬────────────────────────┤
-                    │  Identity   │  Automation   │    Observability       │
-                    │  Users/RBAC │  Cron/Events  │    Logs/Uptime/SLA    │
+                    │  Identity   │  Automation  │    Observability       │
+                    │  Users/RBAC │  Cron/Events │    Logs/Uptime/SLA     │
                     ├─────────────┼──────────────┼────────────────────────┤
-                    │  DB Gateway │  Deployment   │    Data Pipeline       │
-                    │  SQL Firewall│ Feature Flags │    CDC/Analytics      │
+                    │  DB Gateway │  Deployment  │    Data Pipeline       │
+                    │ SQL Firewall│ Feature Flags│    CDC/Analytics       │
                     └─────────────┴──────────────┴────────────────────────┘
 ```
 

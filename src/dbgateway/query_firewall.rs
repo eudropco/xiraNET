@@ -39,7 +39,6 @@ impl QueryFirewall {
                 Regex::new(r"(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)").unwrap(),
                 Regex::new(r"(?i)\bALTER\s+TABLE\b.*\b(DROP|RENAME)\b").unwrap(),
                 Regex::new(r"(?i)\bDELETE\s+FROM\s+\w+\s*$").unwrap(), // DELETE without WHERE
-                Regex::new(r"(?i)\bUPDATE\s+\w+\s+SET\b(?!.*\bWHERE\b)").unwrap(), // UPDATE without WHERE
                 Regex::new(r"(?i)\b(GRANT|REVOKE)\s+(ALL|SUPER|CREATE)").unwrap(),
                 Regex::new(r"(?i)\bSHUTDOWN\b").unwrap(),
                 Regex::new(r"(?i)\bLOAD\s+DATA\b").unwrap(),
@@ -53,6 +52,15 @@ impl QueryFirewall {
 
     /// Sorguyu kontrol et
     pub fn inspect(&self, query: &str) -> QueryVerdict {
+        // Special check: UPDATE without WHERE (can't use negative lookahead in Rust regex)
+        let upper = query.to_uppercase();
+        if upper.contains("UPDATE") && upper.contains("SET") && !upper.contains("WHERE") {
+            tracing::warn!("🛡️ Query blocked: {}...", &query[..query.len().min(80)]);
+            return QueryVerdict::Block {
+                reason: "UPDATE without WHERE clause detected".to_string(),
+            };
+        }
+
         for pattern in &self.blocked_patterns {
             if pattern.is_match(query) {
                 tracing::warn!("🛡️ Query blocked: {}...", &query[..query.len().min(80)]);
