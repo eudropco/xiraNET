@@ -3,6 +3,7 @@ use reqwest::Client;
 use std::time::Duration;
 use dashmap::DashMap;
 
+#[allow(dead_code)]
 pub struct OAuth2Gateway {
     enabled: bool,
     issuer_url: String,

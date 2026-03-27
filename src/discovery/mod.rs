@@ -18,6 +18,7 @@ pub enum DiscoveryBackend {
 
 /// Consul service response
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 struct ConsulService {
     #[serde(rename = "ServiceName")]
     service_name: String,
@@ -137,7 +138,7 @@ async fn discover_consul(
 }
 
 /// DNS SRV record'dan servisleri keşfet
-async fn discover_dns(registry: &ServiceRegistry, domain: &str) {
+async fn discover_dns(_registry: &ServiceRegistry, domain: &str) {
     // DNS SRV lookup — tokio'nun resolver'ını kullan
     tracing::debug!("DNS discovery for domain: {}", domain);
 

@@ -8,12 +8,12 @@ pub trait Interceptor: Send + Sync {
     fn priority(&self) -> i32 { 0 } // düşük = önce çalışır
 
     /// Request intercept — None döndürürse devam eder, Some döndürürse pipeline durur
-    async fn on_request(&self, ctx: &mut InterceptorContext) -> Option<InterceptorAction> {
+    async fn on_request(&self, _ctx: &mut InterceptorContext) -> Option<InterceptorAction> {
         None
     }
 
     /// Response intercept — response'u değiştirebilir
-    async fn on_response(&self, ctx: &mut InterceptorContext, status: u16, body: &[u8]) -> Option<Vec<u8>> {
+    async fn on_response(&self, _ctx: &mut InterceptorContext, _status: u16, _body: &[u8]) -> Option<Vec<u8>> {
         None
     }
 }
@@ -119,7 +119,7 @@ impl Interceptor for SecurityHeaders {
     fn name(&self) -> &str { "security_headers" }
     fn priority(&self) -> i32 { 100 } // response'da çalışır
 
-    async fn on_request(&self, ctx: &mut InterceptorContext) -> Option<InterceptorAction> {
+    async fn on_request(&self, _ctx: &mut InterceptorContext) -> Option<InterceptorAction> {
         let mut headers = vec![
             ("Strict-Transport-Security".to_string(),
              format!("max-age={}; includeSubDomains{}", self.hsts_max_age, if self.hsts_preload { "; preload" } else { "" })),

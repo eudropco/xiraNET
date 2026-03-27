@@ -34,7 +34,7 @@ impl RetryManager {
         policy: &RetryPolicy,
     ) -> Result<RetryResult, String> {
         let mut attempt = 0;
-        let mut last_error = String::new();
+        let mut last_error;
         let mut total_duration = 0.0;
 
         loop {

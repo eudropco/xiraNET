@@ -14,7 +14,7 @@ struct BotTracker {
     request_count: u32,
     window_start: u64,
     is_bot: bool,
-    user_agent: String,
+    _user_agent: String,
 }
 
 #[derive(Debug)]
@@ -65,7 +65,7 @@ impl BotDetector {
             request_count: 0,
             window_start: now,
             is_bot,
-            user_agent: user_agent.to_string(),
+            _user_agent: user_agent.to_string(),
         });
 
         // Reset window every 60s

@@ -1,6 +1,5 @@
 /// IP Geolocation — country-level IP lookup (MaxMind-compatible format)
 use std::collections::HashMap;
-use std::net::IpAddr;
 
 pub struct GeoIpLookup {
     enabled: bool,

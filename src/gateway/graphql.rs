@@ -5,7 +5,7 @@ use crate::registry::ServiceRegistry;
 /// GraphQL proxy handler
 /// POST /graphql → route to appropriate upstream based on query analysis
 pub async fn graphql_handler(
-    req: HttpRequest,
+    _req: HttpRequest,
     body: web::Bytes,
     registry: web::Data<ServiceRegistry>,
 ) -> HttpResponse {
@@ -22,8 +22,8 @@ pub async fn graphql_handler(
     };
 
     let query = gql_request.get("query").and_then(|q| q.as_str()).unwrap_or("");
-    let operation_name = gql_request.get("operationName").and_then(|o| o.as_str());
-    let variables = gql_request.get("variables");
+    let _operation_name = gql_request.get("operationName").and_then(|o| o.as_str());
+    let _variables = gql_request.get("variables");
 
     // Route'u belirle — servis prefix'ine göre
     // Convention: __typename veya type adından servis belirle

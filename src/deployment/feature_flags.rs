@@ -67,7 +67,7 @@ impl FeatureFlagManager {
                     let mut h = std::collections::hash_map::DefaultHasher::new();
                     // Hash sorted key-value pairs (HashMap itself doesn't implement Hash)
                     let mut entries: Vec<_> = context.iter().collect();
-                    entries.sort_by_key(|(k, _)| k.clone());
+                    entries.sort_by_key(|(k, _)| (*k).clone());
                     for (k, v) in &entries { k.hash(&mut h); v.hash(&mut h); }
                     name.hash(&mut h);
                     (h.finish() % 100) as u32
