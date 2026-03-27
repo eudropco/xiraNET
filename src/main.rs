@@ -2,6 +2,27 @@ use actix_web::{web, App, HttpServer, middleware::DefaultHeaders};
 use std::sync::Arc;
 use std::time::Instant;
 
+// v2.0.0 domain imports
+use xiranet::middleware::waf::{Waf, WafMode};
+use xiranet::middleware::bot_detect::BotDetector;
+use xiranet::middleware::audit_log::AuditLogger;
+use xiranet::metrics::advanced::AdvancedMetrics;
+use xiranet::gateway::health_scoring::HealthScorer;
+use xiranet::metrics::sla::SlaMonitor;
+use xiranet::identity::users::UserManager;
+use xiranet::identity::sessions::SessionManager;
+use xiranet::automation::cron::CronScheduler;
+use xiranet::automation::event_bus::EventBus;
+use xiranet::automation::workflows::WorkflowEngine;
+use xiranet::observability::log_aggregator::LogAggregator;
+use xiranet::observability::uptime::UptimePage;
+use xiranet::observability::incidents::IncidentManager;
+use xiranet::deployment::feature_flags::FeatureFlagManager;
+use xiranet::deployment::releases::ReleaseManager;
+use xiranet::dbgateway::proxy::DbProxy;
+use xiranet::dbgateway::query_firewall::QueryFirewall;
+use xiranet::datapipeline::pipeline::DataPipeline;
+
 use xiranet::alerting::AlertManager;
 use xiranet::cli::{Cli, Commands};
 use xiranet::config::XiraConfig;
@@ -132,6 +153,32 @@ async fn main() -> std::io::Result<()> {
             let config_path = config.clone();
             xiranet::config::start_config_watcher(config_path, shared_config.clone());
 
+            // ═══ v2.0.0 — New Domain State ═══
+            let waf = Arc::new(Waf::new(true, WafMode::Block));
+            let bot_detector = Arc::new(BotDetector::new(true, false, 60));
+            let audit_logger = Arc::new(AuditLogger::new(Some(storage_arc.clone()), true));
+            let advanced_metrics = Arc::new(AdvancedMetrics::new());
+            let health_scorer = Arc::new(HealthScorer::new());
+            let sla_monitor = Arc::new(SlaMonitor::new());
+            let user_manager = Arc::new(UserManager::new());
+            let session_manager = Arc::new(SessionManager::new(5));
+            let cron_scheduler = Arc::new(CronScheduler::new());
+            let event_bus = Arc::new(EventBus::new(10000));
+            let workflow_engine = Arc::new(WorkflowEngine::new());
+            let log_aggregator = Arc::new(LogAggregator::new(50000));
+            let uptime_page = Arc::new(tokio::sync::RwLock::new(UptimePage::new()));
+            let incident_manager = Arc::new(IncidentManager::new());
+            let feature_flags = Arc::new(FeatureFlagManager::new());
+            let release_manager = Arc::new(ReleaseManager::new());
+            let db_proxy = Arc::new(DbProxy::new());
+            let query_firewall = Arc::new(QueryFirewall::new(500.0));
+            let data_pipeline = Arc::new(DataPipeline::new(1000, None));
+
+            // Start Cron Daemon
+            cron_scheduler.clone().start();
+
+            tracing::info!("v2.0.0 domains initialized: Identity, Automation, Observability, DB Gateway, Deployment, Pipeline");
+
             // Health Checker
             let health_registry = registry.clone();
             let health_alerts = alert_manager.clone();
@@ -172,6 +219,10 @@ async fn main() -> std::io::Result<()> {
 
             // Aktif özellikleri belirle
             let mut features = vec!["Gateway", "Admin API", "Dashboard", "Prometheus", "SQLite", "Compression"];
+            features.push("WAF");
+            features.push("Identity");
+            features.push("Automation");
+            features.push("Observability");
             if xira_config.jwt.enabled { features.push("JWT"); }
             if xira_config.ip_filter.enabled { features.push("IP Filter"); }
             if xira_config.cache.enabled { features.push("Cache"); }
@@ -234,7 +285,7 @@ async fn main() -> std::io::Result<()> {
                 None
             };
 
-            // Shared state
+            // Shared state — Core
             let registry_data = web::Data::new(registry);
             let cb_data = web::Data::new(cb_manager);
             let lb_data = web::Data::new(load_balancer);
@@ -244,6 +295,27 @@ async fn main() -> std::io::Result<()> {
             let retry_data = web::Data::new(retry_config);
             let storage_data = web::Data::new(storage_arc.clone());
             let shared_config_data = web::Data::new(shared_config.clone());
+
+            // Shared state — v2.0.0 Domains
+            let waf_data = web::Data::new(waf.clone());
+            let bot_data = web::Data::new(bot_detector.clone());
+            let audit_data = web::Data::new(audit_logger.clone());
+            let adv_metrics_data = web::Data::new(advanced_metrics.clone());
+            let health_score_data = web::Data::new(health_scorer.clone());
+            let sla_data = web::Data::new(sla_monitor.clone());
+            let user_data = web::Data::new(user_manager.clone());
+            let session_data = web::Data::new(session_manager.clone());
+            let cron_data = web::Data::new(cron_scheduler.clone());
+            let event_data = web::Data::new(event_bus.clone());
+            let workflow_data = web::Data::new(workflow_engine.clone());
+            let log_agg_data = web::Data::new(log_aggregator.clone());
+            let uptime_data = web::Data::new(uptime_page.clone());
+            let incident_data = web::Data::new(incident_manager.clone());
+            let flag_data = web::Data::new(feature_flags.clone());
+            let release_data = web::Data::new(release_manager.clone());
+            let db_proxy_data = web::Data::new(db_proxy.clone());
+            let qf_data = web::Data::new(query_firewall.clone());
+            let pipeline_data = web::Data::new(data_pipeline.clone());
 
             // JWT config
             let jwt_enabled = xira_config.jwt.enabled;
@@ -264,7 +336,7 @@ async fn main() -> std::io::Result<()> {
 
             let server = HttpServer::new(move || {
                 App::new()
-                    // Shared state
+                    // Shared state — Core
                     .app_data(registry_data.clone())
                     .app_data(cb_data.clone())
                     .app_data(lb_data.clone())
@@ -274,6 +346,26 @@ async fn main() -> std::io::Result<()> {
                     .app_data(retry_data.clone())
                     .app_data(storage_data.clone())
                     .app_data(shared_config_data.clone())
+                    // Shared state — v2.0.0 Domains
+                    .app_data(waf_data.clone())
+                    .app_data(bot_data.clone())
+                    .app_data(audit_data.clone())
+                    .app_data(adv_metrics_data.clone())
+                    .app_data(health_score_data.clone())
+                    .app_data(sla_data.clone())
+                    .app_data(user_data.clone())
+                    .app_data(session_data.clone())
+                    .app_data(cron_data.clone())
+                    .app_data(event_data.clone())
+                    .app_data(workflow_data.clone())
+                    .app_data(log_agg_data.clone())
+                    .app_data(uptime_data.clone())
+                    .app_data(incident_data.clone())
+                    .app_data(flag_data.clone())
+                    .app_data(release_data.clone())
+                    .app_data(db_proxy_data.clone())
+                    .app_data(qf_data.clone())
+                    .app_data(pipeline_data.clone())
                     // Middleware (ters sırada uygulanır)
                     .wrap(actix_web::middleware::Compress::default())
                     .wrap(cors::configure_cors())

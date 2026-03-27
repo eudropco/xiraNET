@@ -27,7 +27,7 @@ use crate::plugins::PluginManager;
 use std::sync::Arc;
 
 /// Catch-all handler — routes requests through full pipeline:
-/// IP filter → validation → plugins → circuit breaker → cache → load balancer → transform → retry/proxy → plugins → cache write
+/// WAF → Bot detect → IP filter → validation → plugins → circuit breaker → cache → load balancer → transform → retry/proxy → audit → metrics
 pub async fn gateway_handler(
     req: HttpRequest,
     body: web::Bytes,
@@ -37,11 +37,18 @@ pub async fn gateway_handler(
     response_cache: web::Data<Arc<ResponseCache>>,
     plugin_manager: web::Data<PluginManager>,
     retry_config: web::Data<RetryConfig>,
+    // v2.0.0 integrations
+    waf: web::Data<Arc<crate::middleware::waf::Waf>>,
+    bot_detector: web::Data<Arc<crate::middleware::bot_detect::BotDetector>>,
+    audit_logger: web::Data<Arc<crate::middleware::audit_log::AuditLogger>>,
+    adv_metrics: web::Data<Arc<crate::metrics::advanced::AdvancedMetrics>>,
+    health_scorer: web::Data<Arc<crate::gateway::health_scoring::HealthScorer>>,
 ) -> HttpResponse {
     let request_start = std::time::Instant::now();
     let path = req.path().to_string();
     let method = req.method().to_string();
     let peer_ip_log = req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "-".to_string());
+    let body_size = body.len();
 
     // ═══ Request ID — her isteğe benzersiz UUID ═══
     let request_id = req.headers()
@@ -57,6 +64,43 @@ pub async fn gateway_handler(
         }));
     }
 
+    // ═══ [WAF] Web Application Firewall ═══
+    {
+        let headers: Vec<(String, String)> = req.headers().iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+            .collect();
+        let body_str = std::str::from_utf8(&body).unwrap_or("");
+        let query_string = req.query_string();
+        match waf.inspect(&path, Some(query_string), body_str, &headers, &peer_ip_log) {
+            crate::middleware::waf::WafVerdict::Block { reason, rule } => {
+                tracing::warn!("WAF BLOCKED: {} — rule: {} from {}", reason, rule, peer_ip_log);
+                return HttpResponse::Forbidden().json(serde_json::json!({
+                    "error": "Blocked by WAF", "rule": rule, "request_id": request_id,
+                }));
+            }
+            _ => {} // Allow
+        }
+    }
+
+    // ═══ [BOT] Bot Detection ═══
+    {
+        let ua = req.headers().get("user-agent")
+            .and_then(|v| v.to_str().ok()).unwrap_or("");
+        match bot_detector.check(&peer_ip_log, ua) {
+            crate::middleware::bot_detect::BotVerdict::Blocked => {
+                return HttpResponse::Forbidden().json(serde_json::json!({
+                    "error": "Bot blocked", "request_id": request_id,
+                }));
+            }
+            crate::middleware::bot_detect::BotVerdict::RateLimited => {
+                return HttpResponse::TooManyRequests().json(serde_json::json!({
+                    "error": "Bot rate limited", "request_id": request_id,
+                }));
+            }
+            _ => {} // Human or allowed bot
+        }
+    }
+
     // Registry'den prefix eşleştirmesi
     let service = match registry.lookup(&path) {
         Some(svc) => svc,
@@ -67,6 +111,7 @@ pub async fn gateway_handler(
             }));
         }
     };
+    let service_name_for_metrics = service.name.clone();
 
     // ═══ [7] Per-service IP filter ═══
     let peer_ip = req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
@@ -365,8 +410,41 @@ pub async fn gateway_handler(
         .with_label_values(&[&method, &path])
         .observe(duration_ms / 1000.0);
 
-    // ═══ Access Log (nginx combined format) ═══
+    // ═══ [ADVANCED METRICS] Per-service bandwidth + status tracking ═══
     let status_code = final_response.status().as_u16();
+    let response_size = final_response.headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    adv_metrics.record(&service_name_for_metrics, status_code, body_size as u64, response_size, duration_ms);
+
+    // ═══ [HEALTH SCORING] Feed upstream latency for scoring ═══
+    health_scorer.record(&service_name_for_metrics, duration_ms, status_code < 500);
+
+    // ═══ [AUDIT LOG] Write request to audit trail ═══
+    {
+        let ua = req.headers().get("user-agent")
+            .and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+        let key_preview = req.headers().get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .map(|k| if k.len() > 8 { format!("{}...", &k[..8]) } else { k.to_string() });
+        audit_logger.log(&crate::middleware::audit_log::AuditEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            ip: peer_ip_log.clone(),
+            method: method.clone(),
+            path: path.clone(),
+            status: status_code,
+            user_agent: ua,
+            api_key_preview: key_preview,
+            request_id: request_id.clone(),
+            duration_ms,
+            body_size,
+            response_size,
+        });
+    }
+
+    // ═══ Access Log (nginx combined format) ═══
     tracing::info!(
         "{} {} {} {} {:.2}ms [{}]",
         peer_ip_log, method, path, status_code, duration_ms, request_id
