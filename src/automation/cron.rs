@@ -1,10 +1,11 @@
-/// Cron Scheduler — zamanlanmış HTTP çağrıları
+/// Cron Scheduler — zamanlanmış HTTP çağrıları (SQLite persistent)
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct CronScheduler {
     jobs: Arc<RwLock<Vec<CronJob>>>,
     client: reqwest::Client,
+    storage: Option<Arc<crate::registry::storage::SqliteStorage>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -51,6 +52,76 @@ impl CronScheduler {
         Self {
             jobs: Arc::new(RwLock::new(Vec::new())),
             client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().unwrap(),
+            storage: None,
+        }
+    }
+
+    /// SQLite persistent storage ile başlat
+    pub fn with_storage(storage: Arc<crate::registry::storage::SqliteStorage>) -> Self {
+        let _ = storage.execute_raw(
+            "CREATE TABLE IF NOT EXISTS cron_jobs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                schedule TEXT NOT NULL,
+                url TEXT NOT NULL,
+                method TEXT NOT NULL DEFAULT 'GET',
+                enabled INTEGER DEFAULT 1,
+                last_run INTEGER DEFAULT 0,
+                next_run INTEGER DEFAULT 0,
+                run_count INTEGER DEFAULT 0,
+                last_status INTEGER,
+                failure_count INTEGER DEFAULT 0
+            )"
+        );
+
+        let mut loaded_jobs = Vec::new();
+        if let Ok(rows) = storage.query_raw(
+            "SELECT id, name, schedule, url, method, enabled, last_run, next_run, run_count, last_status, failure_count FROM cron_jobs"
+        ) {
+            for row in rows {
+                let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let schedule_str = row.get("schedule").and_then(|v| v.as_str()).unwrap_or("3600");
+                let url = row.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let method = row.get("method").and_then(|v| v.as_str()).unwrap_or("GET").to_string();
+                let enabled = row.get("enabled").and_then(|v| v.as_u64()).unwrap_or(1) == 1;
+                let last_run = row.get("last_run").and_then(|v| v.as_u64()).unwrap_or(0);
+                let next_run = row.get("next_run").and_then(|v| v.as_u64()).unwrap_or(0);
+                let run_count = row.get("run_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let last_status = row.get("last_status").and_then(|v| v.as_u64()).map(|v| v as u16);
+                let failure_count = row.get("failure_count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                let schedule = serde_json::from_str(schedule_str)
+                    .unwrap_or(CronSchedule::EverySeconds(schedule_str.parse().unwrap_or(3600)));
+
+                loaded_jobs.push(CronJob {
+                    id, name, schedule, url, method,
+                    headers: vec![], body: None,
+                    enabled, last_run, next_run, run_count,
+                    last_status, last_duration_ms: 0.0, failure_count,
+                });
+            }
+            tracing::info!("Cron: loaded {} jobs from SQLite", loaded_jobs.len());
+        }
+
+        Self {
+            jobs: Arc::new(RwLock::new(loaded_jobs)),
+            client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().unwrap(),
+            storage: Some(storage),
+        }
+    }
+
+    /// SQLite'a job persist et
+    fn persist_job(&self, job: &CronJob) {
+        if let Some(ref storage) = self.storage {
+            let schedule_json = serde_json::to_string(&job.schedule).unwrap_or_default();
+            let last_status = job.last_status.map(|s| s.to_string()).unwrap_or("NULL".to_string());
+            let _ = storage.execute_raw(&format!(
+                "INSERT OR REPLACE INTO cron_jobs (id, name, schedule, url, method, enabled, last_run, next_run, run_count, last_status, failure_count) VALUES ('{}', '{}', '{}', '{}', '{}', {}, {}, {}, {}, {}, {})",
+                job.id, job.name.replace('\'', "''"), schedule_json.replace('\'', "''"),
+                job.url.replace('\'', "''"), job.method, if job.enabled { 1 } else { 0 },
+                job.last_run, job.next_run, job.run_count, last_status, job.failure_count,
+            ));
         }
     }
 
@@ -66,6 +137,7 @@ impl CronScheduler {
             run_count: 0, last_status: None, last_duration_ms: 0.0, failure_count: 0,
         };
 
+        self.persist_job(&job);
         self.jobs.write().await.push(job);
         tracing::info!("Cron job added: {}", id);
         id
@@ -103,6 +175,9 @@ impl CronScheduler {
                     tracing::warn!("Cron [{}] failed: {}", job.name, e);
                 }
             }
+
+            // Persist updated state after each run
+            self.persist_job(job);
         }
     }
 
@@ -123,6 +198,9 @@ impl CronScheduler {
 
     /// İş kaldır
     pub async fn remove_job(&self, id: &str) -> bool {
+        if let Some(ref storage) = self.storage {
+            let _ = storage.execute_raw(&format!("DELETE FROM cron_jobs WHERE id = '{}'", id));
+        }
         let mut jobs = self.jobs.write().await;
         let len = jobs.len();
         jobs.retain(|j| j.id != id);

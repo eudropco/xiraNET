@@ -160,9 +160,9 @@ async fn main() -> std::io::Result<()> {
             let advanced_metrics = Arc::new(AdvancedMetrics::new());
             let health_scorer = Arc::new(HealthScorer::new());
             let sla_monitor = Arc::new(SlaMonitor::new());
-            let user_manager = Arc::new(UserManager::new());
+            let user_manager = Arc::new(UserManager::with_storage(storage_arc.clone()));
             let session_manager = Arc::new(SessionManager::new(5));
-            let cron_scheduler = Arc::new(CronScheduler::new());
+            let cron_scheduler = Arc::new(CronScheduler::with_storage(storage_arc.clone()));
             let event_bus = Arc::new(EventBus::new(10000));
             let workflow_engine = Arc::new(WorkflowEngine::new());
             let log_aggregator = Arc::new(LogAggregator::new(50000));
