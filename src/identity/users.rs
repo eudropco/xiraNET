@@ -261,15 +261,38 @@ impl UserManager {
     pub fn user_count(&self) -> usize { self.users.len() }
 }
 
-/// Generate a random 16-byte hex salt
-fn generate_salt() -> String {
-    use rand::Rng;
-    let salt: [u8; 16] = rand::thread_rng().gen();
-    salt.iter().map(|b| format!("{:02x}", b)).collect()
+/// Hash password with Argon2id (production-grade)
+fn hash_password(password: &str, _salt: &str) -> String {
+    use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+    let salt = SaltString::generate(&mut rand::thread_rng());
+    let argon2 = Argon2::default();
+    argon2.hash_password(password.as_bytes(), &salt)
+        .expect("Argon2 hash failed")
+        .to_string()
 }
 
-/// Hash password with salt (iterative stretching, 1000 rounds)
-fn hash_password(password: &str, salt: &str) -> String {
+/// Verify password — supports both Argon2id (new) and legacy salt$hash (old)
+fn verify_password(password: &str, stored: &str) -> bool {
+    if stored.starts_with("$argon2") {
+        // Argon2id verification
+        use argon2::{Argon2, PasswordVerifier, PasswordHash};
+        let parsed = match PasswordHash::new(stored) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
+    } else {
+        // Legacy: salt$hash format (DefaultHasher × 1000)
+        if let Some(salt) = stored.split('$').next() {
+            legacy_hash_password(password, salt) == stored
+        } else {
+            false
+        }
+    }
+}
+
+/// Legacy hash for backward compat (will be removed in v3.0)
+fn legacy_hash_password(password: &str, salt: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let salted = format!("{}:{}:{}", salt, password, salt);
@@ -280,11 +303,10 @@ fn hash_password(password: &str, salt: &str) -> String {
     format!("{}${:016x}", salt, hash)
 }
 
-/// Verify password against stored hash (salt$hash format)
-fn verify_password(password: &str, stored: &str) -> bool {
-    if let Some(salt) = stored.split('$').next() {
-        hash_password(password, salt) == stored
-    } else {
-        false
-    }
+/// Generate a random salt (used by Argon2 internally, kept for API compat)
+fn generate_salt() -> String {
+    use rand::Rng;
+    let salt: [u8; 16] = rand::thread_rng().gen();
+    salt.iter().map(|b| format!("{:02x}", b)).collect()
 }
+

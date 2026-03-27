@@ -14,6 +14,7 @@ pub mod request_replay;
 pub mod graphql;
 pub mod interceptors;
 pub mod health_scoring;
+pub mod ws_metrics;
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use crate::config::RetryConfig;

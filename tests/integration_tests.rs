@@ -164,7 +164,8 @@ mod identity_tests {
         let u1 = mgr.register("s1@test.com".into(), "s1".into(), "samepass", UserRole::Viewer).unwrap();
         let u2 = mgr.register("s2@test.com".into(), "s2".into(), "samepass", UserRole::Viewer).unwrap();
         assert_ne!(u1.password_hash, u2.password_hash, "Same password must produce different hashes");
-        assert!(u1.password_hash.contains('$') && u2.password_hash.contains('$'), "Hash must be salt$hash format");
+        assert!(u1.password_hash.starts_with("$argon2"), "Hash must be Argon2 format, got: {}", u1.password_hash);
+        assert!(u2.password_hash.starts_with("$argon2"), "Hash must be Argon2 format, got: {}", u2.password_hash);
     }
 
     #[test]

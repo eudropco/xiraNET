@@ -43,6 +43,15 @@ pub struct XiraConfig {
     pub redis: RedisConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    // v2.0.0 domain configs
+    #[serde(default)]
+    pub waf: WafConfig,
+    #[serde(default)]
+    pub bot_detection: BotDetectionConfig,
+    #[serde(default)]
+    pub identity: IdentityConfig,
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,11 +132,14 @@ pub struct RateLimitConfig {
     pub max_requests: u32,
     #[serde(default = "default_rate_window")]
     pub window_secs: u64,
+    /// Per-route overrides: path prefix → max requests per window
+    #[serde(default)]
+    pub routes: std::collections::HashMap<String, u32>,
 }
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
-        Self { max_requests: 100, window_secs: 60 }
+        Self { max_requests: 100, window_secs: 60, routes: std::collections::HashMap::new() }
     }
 }
 
@@ -295,6 +307,77 @@ fn default_otel_endpoint() -> String { "http://localhost:4317".to_string() }
 fn default_service_name() -> String { "xiranet".to_string() }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct WafConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// "block" or "detect_only"
+    #[serde(default = "default_waf_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub custom_block_patterns: Vec<String>,
+}
+impl Default for WafConfig {
+    fn default() -> Self {
+        Self { enabled: true, mode: "block".into(), custom_block_patterns: vec![] }
+    }
+}
+fn default_waf_mode() -> String { "block".into() }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BotDetectionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub block_bots: bool,
+    #[serde(default = "default_crawl_rate")]
+    pub crawl_rate_limit: u32,
+}
+impl Default for BotDetectionConfig {
+    fn default() -> Self {
+        Self { enabled: true, block_bots: false, crawl_rate_limit: 60 }
+    }
+}
+fn default_crawl_rate() -> u32 { 60 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IdentityConfig {
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions_per_user: usize,
+    #[serde(default = "default_password_min")]
+    pub password_min_length: usize,
+    #[serde(default = "default_true")]
+    pub registration_enabled: bool,
+}
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self { max_sessions_per_user: 5, password_min_length: 8, registration_enabled: true }
+    }
+}
+fn default_max_sessions() -> usize { 5 }
+fn default_password_min() -> usize { 8 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ObservabilityConfig {
+    #[serde(default = "default_log_max_entries")]
+    pub log_max_entries: usize,
+    #[serde(default = "default_uptime_history")]
+    pub uptime_history_days: u32,
+    #[serde(default = "default_sla_target")]
+    pub sla_target_uptime: f64,
+    #[serde(default = "default_sla_latency")]
+    pub sla_target_latency_ms: f64,
+}
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self { log_max_entries: 50000, uptime_history_days: 90, sla_target_uptime: 99.9, sla_target_latency_ms: 500.0 }
+    }
+}
+fn default_log_max_entries() -> usize { 50000 }
+fn default_uptime_history() -> u32 { 90 }
+fn default_sla_target() -> f64 { 99.9 }
+fn default_sla_latency() -> f64 { 500.0 }
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ServiceConfig {
     pub name: String,
     pub prefix: String,
@@ -387,6 +470,10 @@ impl Default for XiraConfig {
             discovery: DiscoveryConfig::default(),
             redis: RedisConfig::default(),
             telemetry: TelemetryConfig::default(),
+            waf: WafConfig::default(),
+            bot_detection: BotDetectionConfig::default(),
+            identity: IdentityConfig::default(),
+            observability: ObservabilityConfig::default(),
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "xiranet"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "xiraNET — Central Infrastructure Hub"
 authors = ["valverde"]
@@ -35,6 +35,7 @@ tracing-appender = "0.2"
 
 # Auth
 jsonwebtoken = "9"
+argon2 = "0.5"
 
 # Concurrent data structures
 dashmap = "6"

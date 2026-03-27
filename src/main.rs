@@ -153,19 +153,24 @@ async fn main() -> std::io::Result<()> {
             let config_path = config.clone();
             xiranet::config::start_config_watcher(config_path, shared_config.clone());
 
-            // ═══ v2.0.0 — New Domain State ═══
-            let waf = Arc::new(Waf::new(true, WafMode::Block));
-            let bot_detector = Arc::new(BotDetector::new(true, false, 60));
+            // ═══ v2.0.0 — New Domain State (config-driven) ═══
+            let waf_mode = if xira_config.waf.mode == "detect_only" { WafMode::DetectOnly } else { WafMode::Block };
+            let waf = Arc::new(Waf::new(xira_config.waf.enabled, waf_mode));
+            let bot_detector = Arc::new(BotDetector::new(
+                xira_config.bot_detection.enabled,
+                xira_config.bot_detection.block_bots,
+                xira_config.bot_detection.crawl_rate_limit,
+            ));
             let audit_logger = Arc::new(AuditLogger::new(Some(storage_arc.clone()), true));
             let advanced_metrics = Arc::new(AdvancedMetrics::new());
             let health_scorer = Arc::new(HealthScorer::new());
             let sla_monitor = Arc::new(SlaMonitor::new());
             let user_manager = Arc::new(UserManager::with_storage(storage_arc.clone()));
-            let session_manager = Arc::new(SessionManager::new(5));
+            let session_manager = Arc::new(SessionManager::new(xira_config.identity.max_sessions_per_user));
             let cron_scheduler = Arc::new(CronScheduler::with_storage(storage_arc.clone()));
             let event_bus = Arc::new(EventBus::new(10000));
             let workflow_engine = Arc::new(WorkflowEngine::new());
-            let log_aggregator = Arc::new(LogAggregator::new(50000));
+            let log_aggregator = Arc::new(LogAggregator::new(xira_config.observability.log_max_entries));
             let uptime_page = Arc::new(tokio::sync::RwLock::new(UptimePage::new()));
             let incident_manager = Arc::new(IncidentManager::new());
             let feature_flags = Arc::new(FeatureFlagManager::new());
@@ -390,6 +395,7 @@ async fn main() -> std::io::Result<()> {
                     // Prometheus metrics
                     .route("/metrics", web::get().to(metrics::metrics_handler))
                     // WebSocket
+                    .route("/ws/metrics", web::get().to(gateway::ws_metrics::ws_metrics_handler))
                     .route("/ws/{tail:.*}", web::get().to(gateway::websocket::websocket_proxy))
                     // Versioned routes
                     .route("/v{version}/{tail:.*}", web::route().to(xiranet::versioning::versioned_gateway_handler))
