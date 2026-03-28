@@ -63,21 +63,17 @@ jobs:
         run: |
           docker run -d --name xira-test -p 9000:9000 xiranet:latest
           echo "Waiting for server startup..."
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:9000/health; then
-              echo ""
-              echo "✅ Health check passed!"
-              break
-            fi
-            sleep 1
-          done
-          # Final assert — must return 200
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/health)
+          sleep 10
+          echo "=== Container logs ==="
+          docker logs xira-test
+          echo "=== End logs ==="
+          # Health assert
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/health || echo "000")
           echo "Health endpoint returned: $HTTP_CODE"
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Health check failed!"
-            docker logs xira-test
+            echo "❌ Health check failed (HTTP $HTTP_CODE)"
             docker stop xira-test && docker rm xira-test
             exit 1
           fi
+          echo "✅ Health check passed!"
           docker stop xira-test && docker rm xira-test
