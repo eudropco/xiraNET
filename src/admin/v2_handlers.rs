@@ -1,13 +1,30 @@
-/// v2.0.0 Admin API Handlers — all new domain endpoints
+/// v2.1.0 Admin API Handlers — all domain endpoints
 use actix_web::{web, HttpRequest, HttpResponse};
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════════
-// IDENTITY
+// IDENTITY — Typed Request DTOs
 // ═══════════════════════════════════════════════════════════════
 
 use crate::identity::users::UserManager;
 use crate::identity::sessions::SessionManager;
+use crate::config::XiraConfig;
+
+#[derive(serde::Deserialize)]
+pub struct CreateUserRequest {
+    pub email: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_role")]
+    pub role: String,
+}
+fn default_role() -> String { "Viewer".to_string() }
+
+#[derive(serde::Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
 
 pub async fn list_users(mgr: web::Data<Arc<UserManager>>) -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
@@ -18,14 +35,29 @@ pub async fn list_users(mgr: web::Data<Arc<UserManager>>) -> HttpResponse {
 
 pub async fn create_user(
     mgr: web::Data<Arc<UserManager>>,
-    body: web::Json<serde_json::Value>,
+    config: web::Data<Arc<tokio::sync::RwLock<XiraConfig>>>,
+    body: web::Json<CreateUserRequest>,
 ) -> HttpResponse {
-    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let username = body.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
-    let role_str = body.get("role").and_then(|v| v.as_str()).unwrap_or("Viewer");
+    let cfg = config.read().await;
 
-    let role = match role_str {
+    // Enforce registration_enabled config
+    if !cfg.identity.registration_enabled {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "Registration is disabled"}));
+    }
+
+    // Enforce password_min_length
+    if body.password.len() < cfg.identity.password_min_length {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": format!("Password must be at least {} characters", cfg.identity.password_min_length)
+        }));
+    }
+
+    // Validate required fields
+    if body.email.is_empty() || body.username.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "email and username are required"}));
+    }
+
+    let role = match body.role.as_str() {
         "SuperAdmin" => crate::identity::users::UserRole::SuperAdmin,
         "Admin" => crate::identity::users::UserRole::Admin,
         "Developer" => crate::identity::users::UserRole::Developer,
@@ -33,7 +65,7 @@ pub async fn create_user(
         _ => crate::identity::users::UserRole::Viewer,
     };
 
-    match mgr.register(email, username, password, role) {
+    match mgr.register(body.email.clone(), body.username.clone(), &body.password, role) {
         Ok(user) => HttpResponse::Created().json(serde_json::json!({
             "id": user.id, "email": user.email, "username": user.username,
         })),
@@ -45,16 +77,17 @@ pub async fn login_user(
     mgr: web::Data<Arc<UserManager>>,
     sessions: web::Data<Arc<SessionManager>>,
     req: HttpRequest,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<LoginRequest>,
 ) -> HttpResponse {
-    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("");
-    let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    if body.email.is_empty() || body.password.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "email and password are required"}));
+    }
 
     let ip = req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     let ua = req.headers().get("user-agent")
         .and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
 
-    match mgr.authenticate(email, password) {
+    match mgr.authenticate(&body.email, &body.password) {
         crate::identity::users::AuthResult::Success { user, token } => {
             let session = sessions.create(&user.id, &token, &ip, &ua, 86400);
             HttpResponse::Ok().json(serde_json::json!({

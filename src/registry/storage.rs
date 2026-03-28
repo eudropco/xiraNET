@@ -282,10 +282,16 @@ impl SqliteStorage {
         }))
     }
 
-    /// Raw SQL çalıştır (CREATE TABLE, INSERT, UPDATE, DELETE)
+    /// Raw SQL çalıştır (CREATE TABLE, etc — no params)
     pub fn execute_raw(&self, sql: &str) -> Result<usize, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(sql).map(|_| 0)
+    }
+
+    /// Parameterized SQL execute (INSERT, UPDATE, DELETE — safe from injection)
+    pub fn execute_params(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(sql, params)
     }
 
     /// Raw SQL sorgusu çalıştır (SELECT) — Vec<serde_json::Value> döndürür

@@ -131,21 +131,28 @@ impl UserManager {
         if let Some(ref storage) = self.storage {
             let role_str = format!("{:?}", user.role);
             let perms_json = serde_json::to_string(&user.permissions).unwrap_or_default();
-            let _ = storage.execute_raw(&format!(
-                "INSERT OR REPLACE INTO identity_users (id, email, username, password_hash, role, permissions, created_at, last_login, login_count, enabled, mfa_enabled, mfa_secret) VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {}, {}, {}, {})",
-                user.id,
-                user.email.replace('\'', "''"),
-                user.username.replace('\'', "''"),
-                user.password_hash.replace('\'', "''"),
-                role_str.replace('\'', "''"),
-                perms_json.replace('\'', "''"),
-                user.created_at,
-                user.last_login,
-                user.login_count,
-                if user.enabled { 1 } else { 0 },
-                if user.mfa_enabled { 1 } else { 0 },
-                user.mfa_secret.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or("NULL".to_string()),
-            ));
+            let enabled: i32 = if user.enabled { 1 } else { 0 };
+            let mfa_enabled: i32 = if user.mfa_enabled { 1 } else { 0 };
+            let created_at = user.created_at as i64;
+            let last_login = user.last_login as i64;
+            let login_count = user.login_count as i64;
+            let _ = storage.execute_params(
+                "INSERT OR REPLACE INTO identity_users (id, email, username, password_hash, role, permissions, created_at, last_login, login_count, enabled, mfa_enabled, mfa_secret) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                &[
+                    &user.id as &dyn rusqlite::types::ToSql,
+                    &user.email,
+                    &user.username,
+                    &user.password_hash,
+                    &role_str,
+                    &perms_json,
+                    &created_at,
+                    &last_login,
+                    &login_count,
+                    &enabled,
+                    &mfa_enabled,
+                    &user.mfa_secret as &dyn rusqlite::types::ToSql,
+                ],
+            );
         }
     }
 

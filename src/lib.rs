@@ -17,7 +17,7 @@ pub mod grpc;
 pub mod discovery;
 pub mod telemetry;
 
-// v2.0.0 — New Domains
+// v2.1.0 — Domains
 pub mod identity;
 pub mod automation;
 pub mod observability;

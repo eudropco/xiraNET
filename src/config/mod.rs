@@ -43,7 +43,7 @@ pub struct XiraConfig {
     pub redis: RedisConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
-    // v2.0.0 domain configs
+    // v2.1.0 domain configs
     #[serde(default)]
     pub waf: WafConfig,
     #[serde(default)]

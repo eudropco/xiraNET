@@ -2,7 +2,7 @@ use actix_web::{web, App, HttpServer, middleware::DefaultHeaders};
 use std::sync::Arc;
 use std::time::Instant;
 
-// v2.0.0 domain imports
+// v2.1.0 domain imports
 use xiranet::middleware::waf::{Waf, WafMode};
 use xiranet::middleware::bot_detect::BotDetector;
 use xiranet::middleware::audit_log::AuditLogger;
@@ -162,7 +162,7 @@ async fn main() -> std::io::Result<()> {
             let config_path = config.clone();
             xiranet::config::start_config_watcher(config_path, shared_config.clone());
 
-            // ═══ v2.0.0 — New Domain State (config-driven) ═══
+            // ═══ v2.1.0 — Domain State (config-driven) ═══
             let waf_mode = if xira_config.waf.mode == "detect_only" { WafMode::DetectOnly } else { WafMode::Block };
             let waf = Arc::new(Waf::new(xira_config.waf.enabled, waf_mode));
             let bot_detector = Arc::new(BotDetector::new(
@@ -191,7 +191,7 @@ async fn main() -> std::io::Result<()> {
             // Start Cron Daemon
             cron_scheduler.clone().start();
 
-            tracing::info!("v2.0.0 domains initialized: Identity, Automation, Observability, DB Gateway, Deployment, Pipeline");
+            tracing::info!("v2.1.0 domains initialized: Identity, Automation, Observability, DB Gateway, Deployment, Pipeline");
 
             // Health Checker (with v2.0 cross-domain feeds)
             let health_registry = registry.clone();
@@ -314,7 +314,7 @@ async fn main() -> std::io::Result<()> {
             let storage_data = web::Data::new(storage_arc.clone());
             let shared_config_data = web::Data::new(shared_config.clone());
 
-            // Shared state — v2.0.0 Domains
+            // Shared state — v2.1.0 Domains
             let waf_data = web::Data::new(waf.clone());
             let bot_data = web::Data::new(bot_detector.clone());
             let audit_data = web::Data::new(audit_logger.clone());
@@ -364,7 +364,7 @@ async fn main() -> std::io::Result<()> {
                     .app_data(retry_data.clone())
                     .app_data(storage_data.clone())
                     .app_data(shared_config_data.clone())
-                    // Shared state — v2.0.0 Domains
+                    // Shared state — v2.1.0 Domains
                     .app_data(waf_data.clone())
                     .app_data(bot_data.clone())
                     .app_data(audit_data.clone())
@@ -393,14 +393,14 @@ async fn main() -> std::io::Result<()> {
                     .wrap(IpFilter::new(ip_whitelist.clone(), ip_blacklist.clone(), ip_enabled))
                     .wrap(ApiKeyAuth::new(api_key.clone()))
                     .wrap(DefaultHeaders::new()
-                        .add(("X-Powered-By", "xiraNET"))
-                        .add(("X-Version", env!("CARGO_PKG_VERSION")))
                         .add(("X-Content-Type-Options", "nosniff"))
                         .add(("X-Frame-Options", "DENY"))
                         .add(("X-XSS-Protection", "1; mode=block"))
                     )
                     // Dashboard
                     .route("/dashboard", web::get().to(dashboard::dashboard_handler))
+                    // Public health endpoint (no auth required — for Docker/LB/smoke tests)
+                    .route("/health", web::get().to(xiranet::admin::handlers::gateway_health))
                     // Prometheus metrics
                     .route("/metrics", web::get().to(metrics::metrics_handler))
                     // WebSocket

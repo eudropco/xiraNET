@@ -64,7 +64,7 @@ impl ApiKeyManager {
         };
 
         self.keys.insert(key.clone(), entry);
-        tracing::info!("API key created: {} ({})", key, self.keys.len());
+        tracing::info!("API key created: {}... (total: {})", &key[..8], self.keys.len());
         key
     }
 

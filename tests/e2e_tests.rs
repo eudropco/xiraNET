@@ -143,9 +143,9 @@ mod e2e_tests {
             .get(format!("{}/health", base_url()))
             .send().await.unwrap();
         let headers = resp.headers();
-        assert!(headers.get("x-powered-by").is_some(), "X-Powered-By header missing");
         assert!(headers.get("x-content-type-options").is_some(), "X-Content-Type-Options missing");
         assert!(headers.get("x-frame-options").is_some(), "X-Frame-Options missing");
+        // X-Powered-By intentionally removed to prevent fingerprinting
     }
 
     // ═══════════════════════════════════════════════════════════════
