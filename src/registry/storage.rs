@@ -141,10 +141,8 @@ impl SqliteStorage {
         })?;
 
         let mut result = Vec::new();
-        for entry in entries {
-            if let Ok(e) = entry {
-                result.push(e);
-            }
+        for e in entries.flatten() {
+            result.push(e);
         }
         Ok(result)
     }
@@ -225,10 +223,8 @@ impl SqliteStorage {
         })?;
 
         let mut result = Vec::new();
-        for log in logs {
-            if let Ok(l) = log {
-                result.push(l);
-            }
+        for l in logs.flatten() {
+            result.push(l);
         }
         Ok(result)
     }
@@ -252,10 +248,8 @@ impl SqliteStorage {
         })?;
 
         let mut result = Vec::new();
-        for event in events {
-            if let Ok(e) = event {
-                result.push(e);
-            }
+        for e in events.flatten() {
+            result.push(e);
         }
         Ok(result)
     }
@@ -322,10 +316,8 @@ impl SqliteStorage {
         })?;
 
         let mut result = Vec::new();
-        for row in rows {
-            if let Ok(v) = row {
-                result.push(v);
-            }
+        for v in rows.flatten() {
+            result.push(v);
         }
         Ok(result)
     }

@@ -70,7 +70,7 @@ impl DistributedRateLimiter {
             let _ = conn.expire::<_, ()>(&key, self.window_secs as i64).await;
         }
 
-        let remaining = if count > self.max_requests { 0 } else { self.max_requests - count };
+        let remaining = self.max_requests.saturating_sub(count);
         let allowed = count <= self.max_requests;
 
         if !allowed {

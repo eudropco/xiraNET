@@ -23,6 +23,12 @@ pub struct AlertDispatcher {
     client: Client,
 }
 
+impl Default for AlertDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlertDispatcher {
     pub fn new() -> Self {
         Self {

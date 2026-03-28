@@ -21,6 +21,12 @@ pub struct DbConnection {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum DbType { PostgreSQL, MySQL, SQLite, Redis, MongoDB }
 
+impl Default for DbProxy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DbProxy {
     pub fn new() -> Self { Self { connections: DashMap::new() } }
 

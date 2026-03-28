@@ -1,6 +1,5 @@
 /// Lua scripting engine — custom middleware via Lua scripts
 /// Uses a simplified Lua-like DSL (no external crate dependency)
-
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -54,7 +53,7 @@ impl LuaEngine {
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 let file_path = entry.path();
-                if file_path.extension().map_or(false, |e| e == "lua") {
+                if file_path.extension().is_some_and(|e| e == "lua") {
                     if let Ok(content) = std::fs::read_to_string(&file_path) {
                         let name = file_path.file_stem().unwrap().to_string_lossy().to_string();
                         let hook = if content.contains("on_request") {

@@ -50,7 +50,7 @@ impl LogAggregator {
         // Index keywords
         for word in message.split_whitespace() {
             if word.len() > 2 {
-                self.index.entry(word.to_lowercase()).or_insert(Vec::new()).push(id);
+                self.index.entry(word.to_lowercase()).or_default().push(id);
             }
         }
 

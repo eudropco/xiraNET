@@ -20,6 +20,12 @@ pub struct WebhookConfig {
     pub failure_count: u64,
 }
 
+impl Default for WebhookRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebhookRegistry {
     pub fn new() -> Self {
         Self {

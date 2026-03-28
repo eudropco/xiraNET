@@ -25,6 +25,12 @@ pub struct SlaMetrics {
     pub last_check: u64,
 }
 
+impl Default for SlaMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SlaMonitor {
     pub fn new() -> Self {
         Self { services: DashMap::new() }

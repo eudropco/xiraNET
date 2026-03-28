@@ -12,6 +12,7 @@ pub enum LoadBalanceStrategy {
 }
 
 impl LoadBalanceStrategy {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "random" => Self::Random,
@@ -26,6 +27,12 @@ impl LoadBalanceStrategy {
 pub struct LoadBalancer {
     counters: Arc<DashMap<Uuid, AtomicUsize>>,
     connections: Arc<DashMap<String, AtomicUsize>>,
+}
+
+impl Default for LoadBalancer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LoadBalancer {

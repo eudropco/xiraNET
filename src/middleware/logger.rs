@@ -15,6 +15,12 @@ pub struct RequestLogger {
     storage: Option<Arc<SqliteStorage>>,
 }
 
+impl Default for RequestLogger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RequestLogger {
     pub fn new() -> Self {
         Self { storage: None }

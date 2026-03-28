@@ -14,6 +14,12 @@ pub struct ServiceRegistry {
     storage: Option<Arc<SqliteStorage>>,
 }
 
+impl Default for ServiceRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServiceRegistry {
     pub fn new() -> Self {
         Self {
@@ -159,12 +165,11 @@ impl ServiceRegistry {
 
         for entry in self.services.iter() {
             let prefix = &entry.prefix;
-            if path == prefix || path.starts_with(&format!("{}/", prefix)) {
-                if prefix.len() > best_len {
+            if (path == prefix || path.starts_with(&format!("{}/", prefix)))
+                && prefix.len() > best_len {
                     best_len = prefix.len();
                     best_match = Some(entry.value().clone());
                 }
-            }
         }
 
         best_match

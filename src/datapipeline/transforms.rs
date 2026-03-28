@@ -29,6 +29,12 @@ pub enum TransformAction {
 #[derive(Clone, Debug)]
 pub enum ValueTransform { Uppercase, Lowercase, Trim, Hash }
 
+impl Default for TransformEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransformEngine {
     pub fn new() -> Self { Self { rules: Vec::new() } }
 

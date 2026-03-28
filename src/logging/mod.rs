@@ -1,6 +1,5 @@
 /// File-based log export module
 /// tracing_ext/mod.rs zaten file logging yapıyor, bu modül ek export fonksiyonları sağlar
-
 pub fn get_log_dir() -> &'static str {
     "logs"
 }

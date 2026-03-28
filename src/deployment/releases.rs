@@ -23,6 +23,12 @@ pub struct Release {
 #[derive(Clone, Debug, serde::Serialize)] pub enum ReleaseStrategy { BlueGreen, Canary { percentage: u32 } }
 #[derive(Clone, Debug, serde::Serialize, PartialEq)] pub enum ReleaseStatus { Active, RolledBack, Completed }
 
+impl Default for ReleaseManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReleaseManager {
     pub fn new() -> Self { Self { releases: DashMap::new() } }
 

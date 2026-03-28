@@ -25,6 +25,12 @@ pub struct Incident {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TimelineEntry { pub timestamp: u64, pub message: String, pub author: String }
 
+impl Default for IncidentManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IncidentManager {
     pub fn new() -> Self { Self { incidents: Arc::new(RwLock::new(Vec::new())) } }
 

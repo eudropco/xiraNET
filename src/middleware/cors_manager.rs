@@ -29,6 +29,12 @@ impl Default for CorsPolicy {
     }
 }
 
+impl Default for CorsManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CorsManager {
     pub fn new() -> Self {
         Self {

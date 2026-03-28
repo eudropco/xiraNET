@@ -50,7 +50,7 @@ impl SessionManager {
         self.sessions.insert(token.to_string(), session.clone());
 
         // User→sessions mapping
-        let mut user_tokens = self.user_sessions.entry(user_id.to_string()).or_insert(Vec::new());
+        let mut user_tokens = self.user_sessions.entry(user_id.to_string()).or_default();
         user_tokens.push(token.to_string());
 
         // Max session kontrolü — en eski session'ı kapat

@@ -67,14 +67,14 @@ fn extract_version(path: &str) -> (Option<String>, String) {
 
     if parts.len() >= 2 {
         let segment = parts[1];
-        if segment.starts_with('v') {
-            if let Ok(_num) = segment[1..].parse::<u32>() {
+        if let Some(version_str) = segment.strip_prefix('v') {
+            if let Ok(_num) = version_str.parse::<u32>() {
                 let remaining = if parts.len() >= 3 {
                     format!("/{}", parts[2])
                 } else {
                     "/".to_string()
                 };
-                return (Some(segment[1..].to_string()), remaining);
+                return (Some(version_str.to_string()), remaining);
             }
         }
     }

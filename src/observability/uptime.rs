@@ -22,6 +22,12 @@ pub enum ServiceStatus { Operational, Degraded, PartialOutage, MajorOutage, Main
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct StatusPoint { pub timestamp: u64, pub status: ServiceStatus, pub response_ms: f64 }
 
+impl Default for UptimePage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UptimePage {
     pub fn new() -> Self {
         Self { services: DashMap::new(), global_message: String::new() }

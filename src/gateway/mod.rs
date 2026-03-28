@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 /// Catch-all handler — routes requests through full pipeline:
 /// WAF → Bot detect → IP filter → validation → plugins → circuit breaker → cache → load balancer → transform → retry/proxy → audit → metrics
+#[allow(clippy::too_many_arguments)]
 pub async fn gateway_handler(
     req: HttpRequest,
     body: web::Bytes,
@@ -73,14 +74,11 @@ pub async fn gateway_handler(
             .collect();
         let body_str = std::str::from_utf8(&body).unwrap_or("");
         let query_string = req.query_string();
-        match waf.inspect(&path, Some(query_string), body_str, &headers, &peer_ip_log) {
-            crate::middleware::waf::WafVerdict::Block { reason, rule } => {
+        if let crate::middleware::waf::WafVerdict::Block { reason, rule } = waf.inspect(&path, Some(query_string), body_str, &headers, &peer_ip_log) {
                 tracing::warn!("WAF BLOCKED: {} — rule: {} from {}", reason, rule, peer_ip_log);
                 return HttpResponse::Forbidden().json(serde_json::json!({
                     "error": "Blocked by WAF", "rule": rule, "request_id": request_id,
                 }));
-            }
-            _ => {} // Allow
         }
     }
 
@@ -155,17 +153,14 @@ pub async fn gateway_handler(
 
         let actions = plugin_manager.execute_on_request(&method, &path, &headers).await;
         for action in actions {
-            match action {
-                crate::plugins::PluginAction::Block(status, msg) => {
-                    tracing::info!("Plugin blocked request: {} {} → {} {}", method, path, status, msg);
-                    let status_code = actix_web::http::StatusCode::from_u16(status)
-                        .unwrap_or(actix_web::http::StatusCode::FORBIDDEN);
-                    return HttpResponse::build(status_code).json(serde_json::json!({
-                        "error": "Blocked by plugin",
-                        "message": msg,
-                    }));
-                }
-                _ => {}
+            if let crate::plugins::PluginAction::Block(status, msg) = action {
+                tracing::info!("Plugin blocked request: {} {} → {} {}", method, path, status, msg);
+                let status_code = actix_web::http::StatusCode::from_u16(status)
+                    .unwrap_or(actix_web::http::StatusCode::FORBIDDEN);
+                return HttpResponse::build(status_code).json(serde_json::json!({
+                    "error": "Blocked by plugin",
+                    "message": msg,
+                }));
             }
         }
     }

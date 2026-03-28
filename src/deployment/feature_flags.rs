@@ -28,6 +28,12 @@ pub struct TargetRule {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Operator { Equals, NotEquals, Contains, StartsWith, InList }
 
+impl Default for FeatureFlagManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FeatureFlagManager {
     pub fn new() -> Self { Self { flags: DashMap::new() } }
 

@@ -19,6 +19,12 @@ pub struct UpstreamScore {
     error_window: VecDeque<bool>,
 }
 
+impl Default for HealthScorer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HealthScorer {
     pub fn new() -> Self {
         Self { scores: DashMap::new() }

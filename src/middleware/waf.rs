@@ -70,11 +70,9 @@ impl Waf {
         }
 
         // Tüm inputları birleştir
-        let inputs = vec![
-            path.to_string(),
+        let inputs = [path.to_string(),
             query.unwrap_or("").to_string(),
-            body.to_string(),
-        ];
+            body.to_string()];
 
         // Header değerlerini de kontrol et
         let header_values: Vec<String> = headers.iter().map(|(_, v)| v.clone()).collect();

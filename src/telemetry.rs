@@ -2,7 +2,6 @@
 ///
 /// Bu modül OpenTelemetry OTLP exporter kurulumunu sağlar.
 /// Eğer OTLP endpoint erişilebilir değilse sessizce devre dışı kalır.
-
 /// OTel provider placeholder (graceful degradation)
 pub struct OtelGuard {
     _private: (),

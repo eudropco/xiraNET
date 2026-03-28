@@ -62,7 +62,7 @@ impl EventBus {
             .or_insert_with(|| broadcast::channel(1024).0);
         let receiver = sender.subscribe();
 
-        let mut subs = self.subscriptions.entry(topic.to_string()).or_insert(Vec::new());
+        let mut subs = self.subscriptions.entry(topic.to_string()).or_default();
         if !subs.contains(&subscriber_id.to_string()) {
             subs.push(subscriber_id.to_string());
         }

@@ -41,6 +41,12 @@ pub enum StepStatus { Pending, Running, Success, Failed, Skipped }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FailureAction { Stop, Skip, Retry(u32) }
 
+impl Default for WorkflowEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WorkflowEngine {
     pub fn new() -> Self {
         Self {

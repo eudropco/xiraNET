@@ -25,6 +25,12 @@ pub struct BandwidthCounter {
     pub total_bytes_out: AtomicU64,
 }
 
+impl Default for AdvancedMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdvancedMetrics {
     pub fn new() -> Self {
         Self {

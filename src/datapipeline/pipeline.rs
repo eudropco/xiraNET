@@ -104,7 +104,7 @@ impl DataPipeline {
     /// Buffer'ı sink'e flush et
     async fn flush_buffer(&self, buffer: &mut Vec<AnalyticsEvent>) {
         if let Some(ref url) = self.sink_url {
-            let events: Vec<_> = buffer.drain(..).collect();
+            let events: Vec<_> = std::mem::take(buffer);
             let payload = serde_json::json!({
                 "source": "xiranet",
                 "event_count": events.len(),

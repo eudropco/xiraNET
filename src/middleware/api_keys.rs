@@ -38,6 +38,12 @@ pub enum KeyValidation {
     PrefixDenied,
 }
 
+impl Default for ApiKeyManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ApiKeyManager {
     pub fn new() -> Self {
         Self {

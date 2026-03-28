@@ -39,6 +39,12 @@ pub struct InterceptorChain {
     interceptors: Vec<Arc<dyn Interceptor>>,
 }
 
+impl Default for InterceptorChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InterceptorChain {
     pub fn new() -> Self {
         Self { interceptors: Vec::new() }

@@ -39,12 +39,19 @@ pub enum UserRole {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum AuthResult {
     Success { user: User, token: String },
     InvalidCredentials,
     AccountDisabled,
     MfaRequired { user_id: String },
     NotFound,
+}
+
+impl Default for UserManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UserManager {

@@ -175,13 +175,13 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             println!("✅ {}", serde_json::to_string_pretty(&body)?);
         }
         Commands::Remove { id, gateway, key } => {
-            let resp = client.delete(&format!("{}/xira/services/{}", gateway, id))
+            let resp = client.delete(format!("{}/xira/services/{}", gateway, id))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             println!("{}", serde_json::to_string_pretty(&body)?);
         }
         Commands::List { gateway, key } => {
-            let resp = client.get(&format!("{}/xira/services", gateway))
+            let resp = client.get(format!("{}/xira/services", gateway))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             if let Some(data) = body.get("data") {
@@ -216,13 +216,13 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             } else { println!("{}", serde_json::to_string_pretty(&body)?); }
         }
         Commands::Health { gateway, key } => {
-            let resp = client.get(&format!("{}/xira/health", gateway))
+            let resp = client.get(format!("{}/xira/health", gateway))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             println!("🏥 Gateway Health:\n{}", serde_json::to_string_pretty(&body)?);
         }
         Commands::Stats { gateway, key } => {
-            let resp = client.get(&format!("{}/xira/stats", gateway))
+            let resp = client.get(format!("{}/xira/stats", gateway))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             if let Some(data) = body.get("data") {
@@ -235,13 +235,13 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             } else { println!("{}", serde_json::to_string_pretty(&body)?); }
         }
         Commands::CircuitBreakers { gateway, key } => {
-            let resp = client.get(&format!("{}/xira/circuit-breakers", gateway))
+            let resp = client.get(format!("{}/xira/circuit-breakers", gateway))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             println!("⚡ Circuit Breakers:\n{}", serde_json::to_string_pretty(&body)?);
         }
         Commands::CacheClear { gateway, key } => {
-            let resp = client.post(&format!("{}/xira/cache/clear", gateway))
+            let resp = client.post(format!("{}/xira/cache/clear", gateway))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             println!("🗑️  {}", serde_json::to_string_pretty(&body)?);
@@ -278,7 +278,7 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             println!("📡 xiraNET Status ({})\n", gateway);
 
             // Health
-            let health = client.get(&format!("{}/xira/health", gateway))
+            let health = client.get(format!("{}/xira/health", gateway))
                 .header("X-Api-Key", key.as_str()).send().await;
             match health {
                 Ok(resp) => {
@@ -299,7 +299,7 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             }
 
             // Stats
-            if let Ok(resp) = client.get(&format!("{}/xira/stats", gateway))
+            if let Ok(resp) = client.get(format!("{}/xira/stats", gateway))
                 .header("X-Api-Key", key.as_str()).send().await {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     if let Some(data) = body.get("data") {
@@ -314,7 +314,7 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             }
 
             // Services
-            if let Ok(resp) = client.get(&format!("{}/xira/services", gateway))
+            if let Ok(resp) = client.get(format!("{}/xira/services", gateway))
                 .header("X-Api-Key", key.as_str()).send().await {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     if let Some(services) = body.get("data").and_then(|d| d.get("services")).and_then(|s| s.as_array()) {
@@ -336,7 +336,7 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
         }
 
         Commands::Logs { tail, gateway, key } => {
-            let resp = client.get(&format!("{}/xira/log-stats", gateway))
+            let resp = client.get(format!("{}/xira/log-stats", gateway))
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
 
@@ -521,7 +521,7 @@ health_endpoint = "/health"
 
             // Gateway connectivity
             print!("  Gateway API:   ");
-            match reqwest::Client::new().get(&format!("{}/xira/health", gateway)).send().await {
+            match reqwest::Client::new().get(format!("{}/xira/health", gateway)).send().await {
                 Ok(resp) if resp.status().is_success() => println!("🟢 Healthy"),
                 Ok(resp) => println!("🟡 Responding (HTTP {})", resp.status()),
                 Err(_) => println!("🔴 Unreachable ({})", gateway),
@@ -543,24 +543,24 @@ health_endpoint = "/health"
 
             let mut export = serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "exported_at": chrono::Utc::now().to_rfc3339()});
 
-            if let Ok(resp) = client.get(&format!("{}/xira/services", gateway)).header("X-Api-Key", key.as_str()).send().await {
+            if let Ok(resp) = client.get(format!("{}/xira/services", gateway)).header("X-Api-Key", key.as_str()).send().await {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     export["services"] = body;
                 }
             }
-            if let Ok(resp) = client.get(&format!("{}/xira/config", gateway)).header("X-Api-Key", key.as_str()).send().await {
+            if let Ok(resp) = client.get(format!("{}/xira/config", gateway)).header("X-Api-Key", key.as_str()).send().await {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     export["config"] = body;
                 }
             }
 
-            std::fs::write(&output, serde_json::to_string_pretty(&export)?)?;
+            std::fs::write(output, serde_json::to_string_pretty(&export)?)?;
             println!("✅ Exported to {}", output);
         }
 
         Commands::Import { file, gateway, key } => {
             println!("📥 Importing from {} ...", file);
-            let content = std::fs::read_to_string(&file)?;
+            let content = std::fs::read_to_string(file)?;
             let data: serde_json::Value = serde_json::from_str(&content)?;
 
             if let Some(services) = data.get("services").and_then(|s| s.get("data")).and_then(|d| d.get("services")).and_then(|s| s.as_array()) {
@@ -572,7 +572,7 @@ health_endpoint = "/health"
 
                     if upstream.is_empty() { continue; }
 
-                    match client.post(&format!("{}/xira/services", gateway))
+                    match client.post(format!("{}/xira/services", gateway))
                         .header("X-Api-Key", key.as_str())
                         .json(&serde_json::json!({"name": name, "prefix": prefix, "upstream": upstream, "health_endpoint": "/health"}))
                         .send().await {

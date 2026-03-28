@@ -35,6 +35,7 @@ impl ResponseCache {
     }
 
     /// Cache'den response al
+    #[allow(clippy::type_complexity)]
     pub fn get(&self, key: &str) -> Option<(u16, Vec<(String, String)>, Vec<u8>)> {
         if !self.enabled {
             return None;
@@ -58,7 +59,7 @@ impl ResponseCache {
         }
 
         // Sadece başarılı GET isteklerini cache'le
-        if status < 200 || status >= 300 {
+        if !(200..300).contains(&status) {
             return;
         }
 
