@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for xiraNET v2.1.0
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 
