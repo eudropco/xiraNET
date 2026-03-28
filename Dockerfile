@@ -14,6 +14,7 @@ RUN rm -rf src
 
 # Asıl kaynak kodu kopyala ve derle
 COPY src/ src/
+COPY tests/ tests/
 RUN cargo build --release
 
 # Runtime image
@@ -32,6 +33,7 @@ RUN mkdir -p /app/data /app/logs /app/plugins /app/certs
 EXPOSE 9000 9001
 
 ENV RUST_LOG=info
+ENV XIRA_DB_PATH=/app/data/xiranet.db
 
 # Healthcheck — uses /health (public, no auth required)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
