@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for xiraNET v2.1.0
-FROM rust:1.82-slim-bookworm as builder
+FROM rust:1.85-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -32,10 +32,10 @@ RUN mkdir -p /app/data /app/logs /app/plugins /app/certs
 EXPOSE 9000 9001
 
 ENV RUST_LOG=info
-ENV XIRA_ADMIN_KEY=xira-secret-key-change-me
 
+# Healthcheck — uses /health (public, no auth required)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9000/xira/health -H "X-Api-Key: ${XIRA_ADMIN_KEY}" || exit 1
+    CMD curl -f http://localhost:9000/health || exit 1
 
 ENTRYPOINT ["xiranet"]
 CMD ["serve", "--config", "/app/xiranet.toml"]
