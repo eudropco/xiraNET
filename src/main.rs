@@ -353,7 +353,7 @@ async fn main() -> std::io::Result<()> {
             let storage_for_logger = storage_arc.clone();
 
             let server = HttpServer::new(move || {
-                App::new()
+                let mut app = App::new()
                     // Shared state — Core
                     .app_data(registry_data.clone())
                     .app_data(cb_data.clone())
@@ -401,17 +401,29 @@ async fn main() -> std::io::Result<()> {
                     .route("/dashboard", web::get().to(dashboard::dashboard_handler))
                     // Public health endpoint (no auth required — for Docker/LB/smoke tests)
                     .route("/health", web::get().to(xiranet::admin::handlers::gateway_health))
-                    // Prometheus metrics
-                    .route("/metrics", web::get().to(metrics::metrics_handler))
+                    // Public auth endpoint (no API key required — session login)
+                    .service(
+                        web::scope("/auth")
+                            .route("/login", web::post().to(xiranet::admin::v2_handlers::login_user))
+                    )
                     // WebSocket
                     .route("/ws/metrics", web::get().to(gateway::ws_metrics::ws_metrics_handler))
                     .route("/ws/{tail:.*}", web::get().to(gateway::websocket::websocket_proxy))
                     // Versioned routes
-                    .route("/v{version}/{tail:.*}", web::route().to(xiranet::versioning::versioned_gateway_handler))
-                    // Admin API
-                    .configure(xiranet::admin::configure)
-                    // Gateway catch-all
-                    .default_service(web::route().to(gateway::gateway_handler))
+                    .route("/v{version}/{tail:.*}", web::route().to(xiranet::versioning::versioned_gateway_handler));
+
+                // Prometheus metrics — config-driven
+                if xira_config.metrics.enabled {
+                    app = app.route(&xira_config.metrics.path, web::get().to(metrics::metrics_handler));
+                }
+
+                // Admin API — config-driven
+                if xira_config.admin.enabled {
+                    app = app.configure(xiranet::admin::configure);
+                }
+
+                // Gateway catch-all (must be last)
+                app.default_service(web::route().to(gateway::gateway_handler))
             })
             .workers(workers)
             .bind(format!("{}:{}", host, port))?;

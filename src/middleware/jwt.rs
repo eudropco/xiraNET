@@ -93,9 +93,9 @@ where
             });
         }
 
-        // Admin ve health endpoint'lerini atla
+        // Admin, health, metrics ve auth endpoint'lerini atla
         let path = req.path().to_string();
-        if path.starts_with("/xira") || path == "/metrics" || path == "/health" {
+        if path.starts_with("/xira") || path.starts_with("/auth") || path == "/metrics" || path == "/health" {
             let fut = self.service.call(req);
             return Box::pin(async move {
                 let res = fut.await?;

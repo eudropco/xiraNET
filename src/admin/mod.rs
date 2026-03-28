@@ -28,10 +28,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/docs", web::get().to(openapi::swagger_ui_handler))
             .route("/docs/spec", web::get().to(openapi::openapi_handler))
 
-            // ═══ Identity (v2.0) ═══
+            // ═══ Identity Admin (v2.0) ═══
             .route("/identity/users", web::get().to(v2_handlers::list_users))
             .route("/identity/users", web::post().to(v2_handlers::create_user))
-            .route("/identity/login", web::post().to(v2_handlers::login_user))
             .route("/identity/sessions", web::get().to(v2_handlers::list_sessions))
             .route("/identity/sessions/flush", web::post().to(v2_handlers::flush_sessions))
 

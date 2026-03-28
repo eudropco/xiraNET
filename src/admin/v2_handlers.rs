@@ -129,17 +129,26 @@ pub async fn list_cron_jobs(scheduler: web::Data<Arc<CronScheduler>>) -> HttpRes
     HttpResponse::Ok().json(serde_json::json!({"jobs": jobs, "total": jobs.len()}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct CreateCronJobRequest {
+    #[serde(default = "default_unnamed")]
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_get")]
+    pub method: String,
+    #[serde(default = "default_interval")]
+    pub interval_secs: u64,
+}
+fn default_unnamed() -> String { "unnamed".to_string() }
+fn default_get() -> String { "GET".to_string() }
+fn default_interval() -> u64 { 60 }
+
 pub async fn create_cron_job(
     scheduler: web::Data<Arc<CronScheduler>>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<CreateCronJobRequest>,
 ) -> HttpResponse {
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed").to_string();
-    let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let method = body.get("method").and_then(|v| v.as_str()).unwrap_or("GET").to_string();
-    let interval = body.get("interval_secs").and_then(|v| v.as_u64()).unwrap_or(60);
-
-    let schedule = crate::automation::cron::CronSchedule::EverySeconds(interval);
-    let id = scheduler.add_job(name, schedule, url, method).await;
+    let schedule = crate::automation::cron::CronSchedule::EverySeconds(body.interval_secs);
+    let id = scheduler.add_job(body.name.clone(), schedule, body.url.clone(), body.method.clone()).await;
     HttpResponse::Created().json(serde_json::json!({"id": id}))
 }
 
@@ -165,15 +174,23 @@ pub async fn list_events(bus: web::Data<Arc<EventBus>>) -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({"events": events, "stats": stats}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct PublishEventRequest {
+    #[serde(default = "default_topic")]
+    pub topic: String,
+    #[serde(default = "default_source")]
+    pub source: String,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+fn default_topic() -> String { "default".to_string() }
+fn default_source() -> String { "api".to_string() }
+
 pub async fn publish_event(
     bus: web::Data<Arc<EventBus>>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<PublishEventRequest>,
 ) -> HttpResponse {
-    let topic = body.get("topic").and_then(|v| v.as_str()).unwrap_or("default").to_string();
-    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("api").to_string();
-    let data = body.get("data").cloned().unwrap_or(serde_json::json!({}));
-
-    let id = bus.publish(&topic, &source, data).await;
+    let id = bus.publish(&body.topic, &body.source, body.data.clone()).await;
     HttpResponse::Created().json(serde_json::json!({"event_id": id}))
 }
 
@@ -224,37 +241,52 @@ pub async fn list_incidents(mgr: web::Data<Arc<IncidentManager>>) -> HttpRespons
     }))
 }
 
+#[derive(serde::Deserialize)]
+pub struct CreateIncidentRequest {
+    #[serde(default = "default_untitled")]
+    pub title: String,
+    #[serde(default = "default_minor")]
+    pub severity: String,
+    #[serde(default)]
+    pub services: Vec<String>,
+}
+fn default_untitled() -> String { "Untitled".to_string() }
+fn default_minor() -> String { "Minor".to_string() }
+
 pub async fn create_incident(
     mgr: web::Data<Arc<IncidentManager>>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<CreateIncidentRequest>,
 ) -> HttpResponse {
-    let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
-    let severity = match body.get("severity").and_then(|v| v.as_str()).unwrap_or("Minor") {
+    let severity = match body.severity.as_str() {
         "Critical" => crate::observability::incidents::Severity::Critical,
         "Major" => crate::observability::incidents::Severity::Major,
         "Info" => crate::observability::incidents::Severity::Info,
         _ => crate::observability::incidents::Severity::Minor,
     };
-    let services: Vec<String> = body.get("services")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
 
-    let id = mgr.create(title, severity, services).await;
+    let id = mgr.create(body.title.clone(), severity, body.services.clone()).await;
     HttpResponse::Created().json(serde_json::json!({"incident_id": id}))
 }
+
+#[derive(serde::Deserialize)]
+pub struct UpdateIncidentRequest {
+    #[serde(default)]
+    pub message: String,
+    #[serde(default = "default_admin")]
+    pub author: String,
+    pub status: Option<String>,
+}
+fn default_admin() -> String { "admin".to_string() }
 
 pub async fn update_incident(
     mgr: web::Data<Arc<IncidentManager>>,
     path: web::Path<String>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<UpdateIncidentRequest>,
 ) -> HttpResponse {
     let id = path.into_inner();
-    let message = body.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let author = body.get("author").and_then(|v| v.as_str()).unwrap_or("admin").to_string();
 
-    if let Some(status) = body.get("status").and_then(|v| v.as_str()) {
-        let s = match status {
+    if let Some(ref status) = body.status {
+        let s = match status.as_str() {
             "Identified" => crate::observability::incidents::IncidentStatus::Identified,
             "Monitoring" => crate::observability::incidents::IncidentStatus::Monitoring,
             "Resolved" => crate::observability::incidents::IncidentStatus::Resolved,
@@ -263,8 +295,8 @@ pub async fn update_incident(
         mgr.update_status(&id, s).await;
     }
 
-    if !message.is_empty() {
-        mgr.add_update(&id, message, author).await;
+    if !body.message.is_empty() {
+        mgr.add_update(&id, body.message.clone(), body.author.clone()).await;
     }
 
     HttpResponse::Ok().json(serde_json::json!({"updated": true}))
@@ -305,17 +337,24 @@ pub async fn list_flags(mgr: web::Data<Arc<FeatureFlagManager>>) -> HttpResponse
     HttpResponse::Ok().json(serde_json::json!({"flags": mgr.list()}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct CreateFlagRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_percentage")]
+    pub percentage: u32,
+}
+fn default_percentage() -> u32 { 100 }
+
 pub async fn create_flag(
     mgr: web::Data<Arc<FeatureFlagManager>>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<CreateFlagRequest>,
 ) -> HttpResponse {
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let desc = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-    let pct = body.get("percentage").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
-
-    mgr.create(name.clone(), desc, enabled, pct);
-    HttpResponse::Created().json(serde_json::json!({"created": name}))
+    mgr.create(body.name.clone(), body.description.clone(), body.enabled, body.percentage);
+    HttpResponse::Created().json(serde_json::json!({"created": body.name}))
 }
 
 pub async fn toggle_flag(
@@ -333,17 +372,22 @@ pub async fn list_releases(mgr: web::Data<Arc<ReleaseManager>>) -> HttpResponse 
     HttpResponse::Ok().json(serde_json::json!({"releases": mgr.list()}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct CreateReleaseRequest {
+    pub service: String,
+    pub blue: String,
+    pub green: String,
+    #[serde(default = "default_threshold")]
+    pub error_threshold: f64,
+}
+fn default_threshold() -> f64 { 0.1 }
+
 pub async fn create_release(
     mgr: web::Data<Arc<ReleaseManager>>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<CreateReleaseRequest>,
 ) -> HttpResponse {
-    let service = body.get("service").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let blue = body.get("blue").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let green = body.get("green").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let threshold = body.get("error_threshold").and_then(|v| v.as_f64()).unwrap_or(0.1);
-
     let strategy = crate::deployment::releases::ReleaseStrategy::BlueGreen;
-    let id = mgr.create(service, blue, green, strategy, threshold);
+    let id = mgr.create(body.service.clone(), body.blue.clone(), body.green.clone(), strategy, body.error_threshold);
     HttpResponse::Created().json(serde_json::json!({"release_id": id}))
 }
 
@@ -369,14 +413,17 @@ pub async fn list_watchers(pipeline: web::Data<Arc<DataPipeline>>) -> HttpRespon
     HttpResponse::Ok().json(serde_json::json!({"watchers": watchers}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct CreateWatcherRequest {
+    pub endpoint: String,
+    pub webhook_url: String,
+}
+
 pub async fn create_watcher(
     pipeline: web::Data<Arc<DataPipeline>>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<CreateWatcherRequest>,
 ) -> HttpResponse {
-    let endpoint = body.get("endpoint").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let webhook = body.get("webhook_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    let id = pipeline.add_watcher(endpoint, webhook).await;
+    let id = pipeline.add_watcher(body.endpoint.clone(), body.webhook_url.clone()).await;
     HttpResponse::Created().json(serde_json::json!({"watcher_id": id}))
 }
 
