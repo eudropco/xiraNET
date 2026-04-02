@@ -103,14 +103,14 @@ pub async fn get_stats(
         uptime_seconds: start_time.elapsed().as_secs(),
         db_stats,
     };
-    HttpResponse::Ok().json(ApiResponse::ok("xiraNET stats", stats))
+    HttpResponse::Ok().json(ApiResponse::ok("XIRA stats", stats))
 }
 
 /// GET /xira/health
 pub async fn gateway_health() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "UP",
-        "service": "xiraNET",
+        "service": "XIRA",
         "version": env!("CARGO_PKG_VERSION"),
         "timestamp": chrono::Utc::now().to_rfc3339(),
     }))

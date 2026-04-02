@@ -1,15 +1,39 @@
+[workspace]
+members = [
+    ".",
+    "crates/xira-common",
+    "crates/xira-security",
+    "crates/xira-auth",
+    "crates/xira-ops",
+    "crates/xira-flow",
+    "crates/xira-gateway",
+]
+resolver = "2"
+
 [package]
 name = "xiranet"
-version = "2.1.0"
+version = "3.0.0"
 edition = "2021"
-description = "xiraNET — Central Infrastructure Hub"
+description = "XIRA Platform — Modular Infrastructure Hub"
 authors = ["valverde"]
+
+[[bin]]
+name = "xira"
+path = "src/main.rs"
 
 [[bin]]
 name = "xiranet"
 path = "src/main.rs"
 
 [dependencies]
+# XIRA Platform crates
+xira-common = { path = "crates/xira-common" }
+xira-security = { path = "crates/xira-security" }
+xira-auth = { path = "crates/xira-auth" }
+xira-ops = { path = "crates/xira-ops" }
+xira-flow = { path = "crates/xira-flow" }
+xira-gateway = { path = "crates/xira-gateway" }
+
 # Web framework
 actix-web = { version = "4", features = ["rustls-0_23", "compress-gzip", "compress-brotli", "compress-zstd"] }
 actix-rt = "2"

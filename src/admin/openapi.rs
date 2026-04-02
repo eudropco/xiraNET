@@ -24,11 +24,11 @@ pub async fn openapi_handler(
     let spec = serde_json::json!({
         "openapi": "3.0.3",
         "info": {
-            "title": "xiraNET API Gateway",
+            "title": "XIRA Platform API",
             "description": "Auto-generated API documentation from registered services",
             "version": env!("CARGO_PKG_VERSION"),
             "contact": {
-                "name": "xiraNET Admin",
+                "name": "XIRA Admin",
                 "url": "/dashboard",
             }
         },
@@ -72,7 +72,7 @@ pub async fn swagger_ui_handler() -> HttpResponse {
     let html = r#"<!DOCTYPE html>
 <html>
 <head>
-    <title>xiraNET — API Documentation</title>
+    <title>XIRA Platform — API Documentation</title>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">

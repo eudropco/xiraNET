@@ -4137,8 +4137,120 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
+name = "xira-auth"
+version = "3.0.0"
+dependencies = [
+ "actix-rt",
+ "actix-web",
+ "argon2",
+ "chrono",
+ "dashmap",
+ "jsonwebtoken",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "xira-common",
+]
+
+[[package]]
+name = "xira-common"
+version = "3.0.0"
+dependencies = [
+ "chrono",
+ "notify",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "xira-flow"
+version = "3.0.0"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "xira-common",
+]
+
+[[package]]
+name = "xira-gateway"
+version = "3.0.0"
+dependencies = [
+ "actix-rt",
+ "actix-web",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "lazy_static",
+ "lru",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
+ "xira-common",
+]
+
+[[package]]
+name = "xira-ops"
+version = "3.0.0"
+dependencies = [
+ "actix-web",
+ "chrono",
+ "dashmap",
+ "lazy_static",
+ "prometheus",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "xira-common",
+]
+
+[[package]]
+name = "xira-security"
+version = "3.0.0"
+dependencies = [
+ "actix-rt",
+ "actix-web",
+ "chrono",
+ "dashmap",
+ "lazy_static",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "xira-common",
+]
+
+[[package]]
 name = "xiranet"
-version = "2.1.0"
+version = "3.0.0"
 dependencies = [
  "actix-cors",
  "actix-files",
@@ -4184,6 +4296,12 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+ "xira-auth",
+ "xira-common",
+ "xira-flow",
+ "xira-gateway",
+ "xira-ops",
+ "xira-security",
 ]
 
 [[package]]

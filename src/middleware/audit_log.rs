@@ -50,33 +50,36 @@ impl AuditLogger {
         Self { storage, enabled }
     }
 
-    /// Audit entry kaydet
+    /// Audit entry kaydet (parameterized — SQL injection safe)
     pub fn log(&self, entry: &AuditEntry) {
         if !self.enabled { return; }
 
         if let Some(ref storage) = self.storage {
-            let _ = storage.execute_raw(&format!(
-                "INSERT INTO audit_log (timestamp, ip, method, path, status, user_agent, api_key_preview, request_id, duration_ms, body_size, response_size) VALUES ('{}', '{}', '{}', '{}', {}, '{}', {}, '{}', {}, {}, {})",
-                entry.timestamp,
-                entry.ip.replace('\'', "''"),
-                entry.method,
-                entry.path.replace('\'', "''"),
-                entry.status,
-                entry.user_agent.replace('\'', "''"),
-                entry.api_key_preview.as_ref().map(|k| format!("'{}'", k)).unwrap_or("NULL".to_string()),
-                entry.request_id,
-                entry.duration_ms,
-                entry.body_size,
-                entry.response_size,
-            ));
+            let _ = storage.execute_params(
+                "INSERT INTO audit_log (timestamp, ip, method, path, status, user_agent, api_key_preview, request_id, duration_ms, body_size, response_size) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                &[
+                    &entry.timestamp as &dyn rusqlite::types::ToSql,
+                    &entry.ip,
+                    &entry.method,
+                    &entry.path,
+                    &(entry.status as i32),
+                    &entry.user_agent,
+                    &entry.api_key_preview as &dyn rusqlite::types::ToSql,
+                    &entry.request_id,
+                    &entry.duration_ms,
+                    &(entry.body_size as i64),
+                    &(entry.response_size as i64),
+                ],
+            );
         }
     }
 
-    /// Son N audit entry'yi getir
+    /// Son N audit entry'yi getir (parameterized limit)
     pub fn recent(&self, limit: usize) -> Vec<serde_json::Value> {
         if let Some(ref storage) = self.storage {
             if let Ok(rows) = storage.query_raw(&format!(
-                "SELECT timestamp, ip, method, path, status, user_agent, request_id, duration_ms FROM audit_log ORDER BY id DESC LIMIT {}", limit
+                "SELECT timestamp, ip, method, path, status, user_agent, request_id, duration_ms FROM audit_log ORDER BY id DESC LIMIT {}",
+                limit as i64
             )) {
                 return rows;
             }

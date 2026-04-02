@@ -47,7 +47,7 @@ pub async fn graphql_handler(
                         Ok(body) => {
                             HttpResponse::build(actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap())
                                 .content_type("application/json")
-                                .insert_header(("X-Proxied-By", "xiraNET-GraphQL"))
+                                .insert_header(("X-Proxied-By", "XIRA-GraphQL"))
                                 .body(body)
                         }
                         Err(e) => HttpResponse::BadGateway().json(serde_json::json!({
@@ -113,7 +113,7 @@ async fn serve_combined_schema(registry: &ServiceRegistry) -> HttpResponse {
             "__schema": {
                 "queryType": { "name": "Query" },
                 "types": types,
-                "description": "xiraNET federated GraphQL schema",
+                "description": "XIRA federated GraphQL schema",
             }
         }
     }))

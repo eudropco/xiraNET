@@ -1,4 +1,7 @@
-use actix_web::{HttpResponse, HttpRequest};
+use actix_web::{HttpResponse, HttpRequest, web};
+use tokio::sync::RwLock;
+use std::sync::Arc;
+use crate::config::XiraConfig;
 
 /// Embedded Web Dashboard v2.1 — Theme toggle + Service detail + Latency + Upstream badges
 pub async fn dashboard_handler(_req: HttpRequest) -> HttpResponse {
@@ -7,12 +10,73 @@ pub async fn dashboard_handler(_req: HttpRequest) -> HttpResponse {
         .body(DASHBOARD_HTML)
 }
 
+/// Authenticated WebSocket handler for dashboard live updates
+/// Requires `?token=<api_key>` query param to connect
+pub async fn ws_dashboard_handler(
+    req: HttpRequest,
+    stream: web::Payload,
+    config: web::Data<Arc<RwLock<XiraConfig>>>,
+    registry: web::Data<crate::registry::ServiceRegistry>,
+    start_time: web::Data<std::time::Instant>,
+) -> Result<HttpResponse, actix_web::Error> {
+    // Auth check: validate token query param against admin API key
+    let query = req.query_string();
+    let token = query.split('&')
+        .find(|p| p.starts_with("token="))
+        .and_then(|p| p.strip_prefix("token="))
+        .unwrap_or("");
+
+    {
+        let cfg = config.read().await;
+        if token.is_empty() || token != cfg.admin.api_key {
+            return Ok(HttpResponse::Unauthorized().json(
+                serde_json::json!({"error": "Missing or invalid token. Use ?token=<api_key>"})
+            ));
+        }
+    }
+
+    let (response, mut session, _msg_stream) = actix_ws::handle(&req, stream)?;
+
+    let registry = registry.into_inner();
+    let start = *start_time.into_inner();
+
+    actix_rt::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+        loop {
+            interval.tick().await;
+
+            let services = registry.list_all();
+            let up = services.iter().filter(|s| s.status == crate::registry::models::ServiceStatus::Up).count();
+            let total_requests: u64 = services.iter().map(|s| s.request_count).sum();
+            let uptime = start.elapsed().as_secs();
+
+            let payload = serde_json::json!({
+                "type": "stats",
+                "data": {
+                    "total_services": services.len(),
+                    "services_up": up,
+                    "services_down": services.len() - up,
+                    "total_requests": total_requests,
+                    "uptime_seconds": uptime,
+                }
+            });
+
+            if session.text(payload.to_string()).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    Ok(response)
+}
+
 const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>xiraNET Dashboard v3.0</title>
+<title>XIRA Platform Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -94,14 +158,14 @@ tr{cursor:pointer}
 <body>
 <div id="apiKeyInput">
 <div class="inner">
-<h2>🔐 xiraNET Dashboard</h2>
+<h2>🔐 XIRA Platform Dashboard</h2>
 <p style="color:var(--text2);margin-bottom:.8rem;font-size:.8rem">Enter your Admin API Key</p>
 <input type="password" id="keyInput" placeholder="API Key" autofocus>
 <button class="btn btn-primary" style="width:100%" onclick="authenticate()">Connect</button>
 </div>
 </div>
 <header class="header">
-<h1>⚡ xiraNET</h1>
+<h1>⚡ XIRA</h1>
 <div class="header-right">
 <div class="status"><span>Online</span><span class="ws-badge ws-disconnected" id="wsBadge">WS: —</span></div>
 <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
@@ -170,6 +234,42 @@ tr{cursor:pointer}
 <div style="padding:.8rem" id="incidentsPanel"><span style="color:var(--text2);font-size:.8rem">No incidents</span></div>
 </div>
 </div>
+<!-- v3.0.0 — Platform Crates Panel -->
+<div class="section">
+<div class="section-header"><h2>📦 Platform Crates</h2><span class="badge" style="background:rgba(139,92,246,.2);color:#a78bfa">v3.0</span></div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;padding:.8rem" id="cratesPanel">
+<div class="crate-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:.75rem">
+<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem"><span style="color:#22c55e">●</span><strong style="font-size:.85rem">xira-common</strong></div>
+<div style="font-size:.7rem;color:var(--text2)">Storage · Config · Models</div>
+<div style="font-size:.65rem;color:var(--text2);margin-top:.2rem">Foundation layer</div>
+</div>
+<div class="crate-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:.75rem">
+<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem"><span style="color:#22c55e">●</span><strong style="font-size:.85rem">xira-security</strong></div>
+<div style="font-size:.7rem;color:var(--text2)">WAF · Bot Detection · Audit</div>
+<div style="font-size:.65rem;color:var(--text2);margin-top:.2rem">5 modules</div>
+</div>
+<div class="crate-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:.75rem">
+<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem"><span style="color:#22c55e">●</span><strong style="font-size:.85rem">xira-auth</strong></div>
+<div style="font-size:.7rem;color:var(--text2)">Users · Sessions · OAuth2</div>
+<div style="font-size:.65rem;color:var(--text2);margin-top:.2rem">4 modules</div>
+</div>
+<div class="crate-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:.75rem">
+<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem"><span style="color:#22c55e">●</span><strong style="font-size:.85rem">xira-ops</strong></div>
+<div style="font-size:.7rem;color:var(--text2)">Metrics · SLA · Uptime · Alerts</div>
+<div style="font-size:.65rem;color:var(--text2);margin-top:.2rem">10 modules</div>
+</div>
+<div class="crate-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:.75rem">
+<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem"><span style="color:#22c55e">●</span><strong style="font-size:.85rem">xira-flow</strong></div>
+<div style="font-size:.7rem;color:var(--text2)">Cron · Events · Workflows</div>
+<div style="font-size:.65rem;color:var(--text2);margin-top:.2rem">5 modules</div>
+</div>
+<div class="crate-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:.5rem;padding:.75rem">
+<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem"><span style="color:#22c55e">●</span><strong style="font-size:.85rem">xira-gateway</strong></div>
+<div style="font-size:.7rem;color:var(--text2)">Proxy · Cache · LB · Circuit</div>
+<div style="font-size:.65rem;color:var(--text2);margin-top:.2rem">14 modules</div>
+</div>
+</div>
+</div>
 <div class="section">
 <div class="section-header"><h2>📈 Advanced Metrics</h2></div>
 <table>
@@ -206,7 +306,7 @@ function api(path,opts={}){
 function connectWS(){
   try{
     const proto=location.protocol==='https:'?'wss:':'ws:';
-    ws=new WebSocket(`${proto}//${location.host}/ws/dashboard`);
+    ws=new WebSocket(`${proto}//${location.host}/ws/dashboard?token=${encodeURIComponent(API_KEY)}`);
     ws.onopen=()=>{document.getElementById('wsBadge').className='ws-badge ws-connected';document.getElementById('wsBadge').textContent='WS: Live'};
     ws.onclose=()=>{document.getElementById('wsBadge').className='ws-badge ws-disconnected';document.getElementById('wsBadge').textContent='WS: Off';setTimeout(connectWS,5000)};
     ws.onmessage=(e)=>{try{const d=JSON.parse(e.data);if(d.type==='stats')updateStats(d.data)}catch(err){}};
@@ -322,7 +422,7 @@ function loadSLA(){
     const violations=d.violations||[];
     document.getElementById('slaPanel').innerHTML=metrics.length?metrics.map(m=>`
 <div class="detail-row"><span class="detail-label">${m.service_name}</span>
-<span>Uptime: <strong style="color:${m.uptime_percent>=99.9?'var(--green)':'var(--red)}">${m.uptime_percent?.toFixed(2)}%</strong> | P99: ${m.latency_p99?.toFixed(0)}ms | Checks: ${m.total_checks} | Violations: ${m.sla_violations}</span>
+<span>Uptime: <strong style="color:${m.uptime_percent<99.9?'var(--red)':'var(--green)'}">${m.uptime_percent?.toFixed(2)}%</strong> | P99: ${m.latency_p99?.toFixed(0)}ms | Checks: ${m.total_checks} | Violations: ${m.sla_violations}</span>
 </div>`).join('')+(violations.length?'<div style="margin-top:.4rem;font-size:.7rem;color:var(--red)">⚠️ '+violations.map(v=>v[0]+': '+v[1]).join(' | ')+'</div>':''):'<span style="color:var(--text2);font-size:.8rem">No SLA data yet</span>';
   }).catch(()=>{})}
 
@@ -333,7 +433,7 @@ function loadAdvMetrics(){
     document.getElementById('metricsTable').innerHTML=svcs.length?svcs.map(s=>`<tr>
 <td><strong>${s.service}</strong></td>
 <td>${(s.requests||0).toLocaleString()}</td>
-<td><span style="color:${(s.error_rate||0)>0.05?'var(--red)':'var(--green)}">${((s.error_rate||0)*100).toFixed(1)}%</span></td>
+<td><span style="color:${(s.error_rate||0)<0.05?'var(--green)':'var(--red)'}">${((s.error_rate||0)*100).toFixed(1)}%</span></td>
 <td style="color:var(--green)">${s['2xx']||0}</td>
 <td style="color:var(--red)">${s['5xx']||0}</td>
 <td>${formatBytes(s.bytes_in||0)}</td>

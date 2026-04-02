@@ -29,7 +29,7 @@ impl MfaEngine {
     /// QR code URL oluştur (Google Authenticator format)
     pub fn generate_qr_url(email: &str, secret: &str) -> String {
         format!(
-            "otpauth://totp/xiraNET:{}?secret={}&issuer=xiraNET&digits=6&period=30",
+            "otpauth://totp/XIRA:{}?secret={}&issuer=XIRA&digits=6&period=30",
             email, secret
         )
     }

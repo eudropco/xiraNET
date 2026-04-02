@@ -1,0 +1,50 @@
+[package]
+name = "xira-gateway"
+version = "3.0.0"
+edition = "2021"
+description = "XIRA Platform — proxy, load balancer, cache, circuit breaker, transform"
+
+[dependencies]
+xira-common = { path = "../xira-common" }
+
+# Web framework
+actix-web = "4"
+actix-rt = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+
+# Logging
+tracing = "0.1"
+
+# HTTP client (proxy)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Identifiers & time
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+
+# Concurrent data structures
+dashmap = "6"
+
+# Response caching
+lru = "0.12"
+
+# Regex (body transform)
+regex = "1"
+lazy_static = "1"
+
+# Utility
+bytes = "1"
+futures-util = "0.3"
+
+# WebSocket
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# Utility
+async-trait = "0.1"
+rand = "0.8"

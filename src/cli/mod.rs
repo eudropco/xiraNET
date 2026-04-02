@@ -1,7 +1,12 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "xiranet", about = "xiraNET — Central Infrastructure Hub", version, author)]
+#[command(
+    name = "xira",
+    about = "⚡ XIRA Platform — Modular Infrastructure Hub v3.0",
+    version,
+    author = "valverde",
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -9,144 +14,115 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// xiraNET gateway sunucusunu başlat
+    /// Start the XIRA gateway server
     Serve {
         #[arg(short, long, default_value = "xiranet.toml")]
         config: String,
         #[arg(short, long)]
         port: Option<u16>,
     },
-    /// Servis ekle
-    Add {
-        name: String,
-        prefix: String,
-        upstream: String,
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-        #[arg(long)]
-        upstreams: Vec<String>,
-        #[arg(long)]
-        load_balance: Option<String>,
-        #[arg(long)]
-        version: Option<String>,
-    },
-    /// Servis kaldır
-    Remove {
-        id: String,
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// Servisleri listele
-    List {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// Sağlık durumu
-    Health {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// İstatistikler
-    Stats {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// Circuit breaker durumları
-    CircuitBreakers {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// Cache temizle
-    CacheClear {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// TLS sertifika oluşturma yardımı
-    GenerateCerts,
-    /// Config dosyasını doğrula
-    Validate {
-        #[arg(short, long, default_value = "xiranet.toml")]
-        config: String,
-    },
-    /// Gateway durumunu göster (servise bağlanır)
+    /// Show platform status
     Status {
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
         #[arg(short, long, default_value = "xira-secret-key-change-me")]
         key: String,
     },
-    /// Son request loglarını göster
-    Logs {
-        /// Gösterilecek log sayısı
-        #[arg(short = 'n', long, default_value = "20")]
-        tail: usize,
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// Basit load test (benchmark)
-    Bench {
-        /// Hedef URL
-        url: String,
-        /// Toplam istek sayısı
-        #[arg(short = 'n', long, default_value = "100")]
-        requests: usize,
-        /// Eşzamanlı istek sayısı
-        #[arg(short, long, default_value = "10")]
-        concurrency: usize,
-    },
-    /// Yeni proje için xiranet.toml template oluştur
+    /// Service management
+    #[command(subcommand)]
+    Service(ServiceCommands),
+    /// Security & compliance
+    #[command(subcommand)]
+    Security(SecurityCommands),
+    /// Observability & monitoring
+    #[command(subcommand)]
+    Ops(OpsCommands),
+    /// System utilities
+    #[command(subcommand)]
+    System(SystemCommands),
+    /// Servis ekle
+    #[command(hide = true)]
+    Add { name: String, prefix: String, upstream: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String, #[arg(long)] upstreams: Vec<String>, #[arg(long)] load_balance: Option<String>, #[arg(long)] version: Option<String> },
+    #[command(hide = true)]
+    Remove { id: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    List { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    Health { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    Stats { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    CircuitBreakers { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    CacheClear { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    GenerateCerts,
+    #[command(hide = true)]
+    Validate { #[arg(short, long, default_value = "xiranet.toml")] config: String },
+    #[command(hide = true)]
+    Logs { #[arg(short = 'n', long, default_value = "20")] tail: usize, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    Bench { url: String, #[arg(short = 'n', long, default_value = "100")] requests: usize, #[arg(short, long, default_value = "10")] concurrency: usize },
+    #[command(hide = true)]
     Init,
-    /// Sistem bağımlılıkları kontrol (port, SQLite, network)
-    Doctor {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-    },
-    /// Tüm config + servisleri JSON'a export et
-    Export {
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-        /// Çıktı dosyası
-        #[arg(short, long, default_value = "xiranet-export.json")]
-        output: String,
-    },
-    /// JSON'dan servisleri toplu import et
-    Import {
-        /// JSON dosya yolu
-        file: String,
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
-    /// Belirli servise test request gönder
-    ProxyTest {
-        /// Test URL (ör: /api/health)
-        path: String,
-        #[arg(short, long, default_value = "GET")]
-        method: String,
-        #[arg(short, long, default_value = "http://localhost:9000")]
-        gateway: String,
-        #[arg(short, long, default_value = "xira-secret-key-change-me")]
-        key: String,
-    },
+    #[command(hide = true)]
+    Doctor { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String },
+    #[command(hide = true)]
+    Export { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String, #[arg(short, long, default_value = "xiranet-export.json")] output: String },
+    #[command(hide = true)]
+    Import { file: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    #[command(hide = true)]
+    ProxyTest { path: String, #[arg(short, long, default_value = "GET")] method: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceCommands {
+    /// List all registered services
+    List { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// Add a new service
+    Add { name: String, prefix: String, upstream: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String, #[arg(long)] upstreams: Vec<String>, #[arg(long)] load_balance: Option<String>, #[arg(long)] version: Option<String> },
+    /// Remove a service by ID
+    Remove { id: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// Test proxy to a path
+    Test { path: String, #[arg(short, long, default_value = "GET")] method: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+}
+
+#[derive(Subcommand)]
+pub enum SecurityCommands {
+    /// View audit log entries
+    Audit { #[arg(short = 'n', long, default_value = "20")] tail: usize, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// Show WAF status
+    Waf { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+}
+
+#[derive(Subcommand)]
+pub enum OpsCommands {
+    /// Show gateway statistics
+    Stats { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// Show circuit breaker states
+    Breakers { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// View recent request logs
+    Logs { #[arg(short = 'n', long, default_value = "20")] tail: usize, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// Run a load test
+    Bench { url: String, #[arg(short = 'n', long, default_value = "100")] requests: usize, #[arg(short, long, default_value = "10")] concurrency: usize },
+    /// Clear response cache
+    CacheClear { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+}
+
+#[derive(Subcommand)]
+pub enum SystemCommands {
+    /// Initialize a new config
+    Init,
+    /// Validate config file
+    Validate { #[arg(short, long, default_value = "xiranet.toml")] config: String },
+    /// Run diagnostics
+    Doctor { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String },
+    /// Export to JSON
+    Export { #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String, #[arg(short, long, default_value = "xira-export.json")] output: String },
+    /// Import from JSON
+    Import { file: String, #[arg(short, long, default_value = "http://localhost:9000")] gateway: String, #[arg(short, long, default_value = "xira-secret-key-change-me")] key: String },
+    /// Generate TLS certificates
+    GenerateCerts,
 }
 
 impl Cli {
@@ -226,7 +202,7 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                 .header("X-Api-Key", key.as_str()).send().await?;
             let body: serde_json::Value = resp.json().await?;
             if let Some(data) = body.get("data") {
-                println!("📊 xiraNET Stats:");
+                println!("📊 XIRA Stats:");
                 println!("  Total Services:  {}", data.get("total_services").and_then(|v| v.as_u64()).unwrap_or(0));
                 println!("  🟢 UP:           {}", data.get("services_up").and_then(|v| v.as_u64()).unwrap_or(0));
                 println!("  🔴 DOWN:         {}", data.get("services_down").and_then(|v| v.as_u64()).unwrap_or(0));
@@ -275,7 +251,7 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
         }
 
         Commands::Status { gateway, key } => {
-            println!("📡 xiraNET Status ({})\n", gateway);
+            println!("📡 XIRA Status ({})\n", gateway);
 
             // Health
             let health = client.get(format!("{}/xira/health", gateway))
@@ -438,10 +414,84 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
 
         Commands::Serve { .. } | Commands::GenerateCerts => {}
 
+        // ═══ Nested subcommand dispatch ═══
+
+        Commands::Service(sub) => {
+            match sub {
+                ServiceCommands::List { gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::List { gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                ServiceCommands::Add { name, prefix, upstream, gateway, key, upstreams, load_balance, version } => {
+                    return Box::pin(run_cli_command(&Commands::Add { name: name.clone(), prefix: prefix.clone(), upstream: upstream.clone(), gateway: gateway.clone(), key: key.clone(), upstreams: upstreams.clone(), load_balance: load_balance.clone(), version: version.clone() })).await;
+                }
+                ServiceCommands::Remove { id, gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::Remove { id: id.clone(), gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                ServiceCommands::Test { path, method, gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::ProxyTest { path: path.clone(), method: method.clone(), gateway: gateway.clone(), key: key.clone() })).await;
+                }
+            }
+        }
+
+        Commands::Security(sub) => {
+            match sub {
+                SecurityCommands::Audit { tail, gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::Logs { tail: *tail, gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                SecurityCommands::Waf { gateway, key } => {
+                    let resp = client.get(format!("{}/xira/security/waf", gateway))
+                        .header("X-Api-Key", key.as_str()).send().await?;
+                    let body: serde_json::Value = resp.json().await?;
+                    println!("🛡️  WAF Status:\n{}", serde_json::to_string_pretty(&body)?);
+                }
+            }
+        }
+
+        Commands::Ops(sub) => {
+            match sub {
+                OpsCommands::Stats { gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::Stats { gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                OpsCommands::Breakers { gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::CircuitBreakers { gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                OpsCommands::Logs { tail, gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::Logs { tail: *tail, gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                OpsCommands::Bench { url, requests, concurrency } => {
+                    return Box::pin(run_cli_command(&Commands::Bench { url: url.clone(), requests: *requests, concurrency: *concurrency })).await;
+                }
+                OpsCommands::CacheClear { gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::CacheClear { gateway: gateway.clone(), key: key.clone() })).await;
+                }
+            }
+        }
+
+        Commands::System(sub) => {
+            match sub {
+                SystemCommands::Init => {
+                    return Box::pin(run_cli_command(&Commands::Init)).await;
+                }
+                SystemCommands::Validate { config } => {
+                    return Box::pin(run_cli_command(&Commands::Validate { config: config.clone() })).await;
+                }
+                SystemCommands::Doctor { gateway } => {
+                    return Box::pin(run_cli_command(&Commands::Doctor { gateway: gateway.clone() })).await;
+                }
+                SystemCommands::Export { gateway, key, output } => {
+                    return Box::pin(run_cli_command(&Commands::Export { gateway: gateway.clone(), key: key.clone(), output: output.clone() })).await;
+                }
+                SystemCommands::Import { file, gateway, key } => {
+                    return Box::pin(run_cli_command(&Commands::Import { file: file.clone(), gateway: gateway.clone(), key: key.clone() })).await;
+                }
+                SystemCommands::GenerateCerts => {}
+            }
+        }
+
         // ═══ v1.0.3 — New CLI Commands ═══
 
         Commands::Init => {
-            let template = r#"# xiraNET Configuration
+            let template = r#"# XIRA Platform Configuration
 [gateway]
 host = "0.0.0.0"
 port = 9000
@@ -494,7 +544,7 @@ health_endpoint = "/health"
         }
 
         Commands::Doctor { gateway } => {
-            println!("🩺 xiraNET Doctor\n");
+            println!("🩺 XIRA Doctor\n");
 
             // Port check
             print!("  Port 9000:     ");

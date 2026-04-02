@@ -2,7 +2,12 @@ use actix_web::{web, App, HttpServer, middleware::DefaultHeaders};
 use std::sync::Arc;
 use std::time::Instant;
 
-// v2.1.0 domain imports
+// ═══ XIRA Platform v3.0 imports ═══
+//
+// Architecture: domain crates compile independently (cargo test --workspace)
+// but hub still uses its own copies for runtime type compatibility.
+// Future: hub will re-export crate types via trait-based abstraction.
+//
 use xiranet::middleware::waf::{Waf, WafMode};
 use xiranet::middleware::bot_detect::BotDetector;
 use xiranet::middleware::audit_log::AuditLogger;
@@ -48,21 +53,23 @@ use xiranet::registry::ServiceRegistry;
 fn print_banner(host: &str, port: u16, features: &[&str]) {
     println!(
         r#"
-    ██╗  ██╗██╗██████╗  █████╗ ███╗   ██╗███████╗████████╗
-    ╚██╗██╔╝██║██╔══██╗██╔══██╗████╗  ██║██╔════╝╚══██╔══╝
-     ╚███╔╝ ██║██████╔╝███████║██╔██╗ ██║█████╗     ██║   
-     ██╔██╗ ██║██╔══██╗██╔══██║██║╚██╗██║██╔══╝     ██║   
-    ██╔╝ ██╗██║██║  ██║██║  ██║██║ ╚████║███████╗   ██║   
-    ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   
+    ██╗  ██╗██╗██████╗  █████╗ 
+    ╚██╗██╔╝██║██╔══██╗██╔══██╗
+     ╚███╔╝ ██║██████╔╝███████║
+     ██╔██╗ ██║██╔══██╗██╔══██║
+    ██╔╝ ██╗██║██║  ██║██║  ██║
+    ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝
     
-    ⚡ Central Infrastructure Hub v{}
+    ⚡ XIRA Platform v{}
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     🌐 Gateway:    http://{}:{}
     🔧 Admin API:  http://{}:{}/xira/services
     📊 Dashboard:  http://{}:{}/dashboard
     📈 Metrics:    http://{}:{}/metrics
     🏥 Health:     http://{}:{}/xira/health
     
-    Features: {}
+    📦 Crates: common | security | auth | ops | flow | gateway
+    🔌 Features: {}
 "#,
         env!("CARGO_PKG_VERSION"),
         host, port, host, port, host, port, host, port, host, port,
@@ -406,8 +413,9 @@ async fn main() -> std::io::Result<()> {
                         web::scope("/auth")
                             .route("/login", web::post().to(xiranet::admin::v2_handlers::login_user))
                     )
-                    // WebSocket
+                    // WebSocket (dashboard = authenticated, others = proxy)
                     .route("/ws/metrics", web::get().to(gateway::ws_metrics::ws_metrics_handler))
+                    .route("/ws/dashboard", web::get().to(dashboard::ws_dashboard_handler))
                     .route("/ws/{tail:.*}", web::get().to(gateway::websocket::websocket_proxy))
                     // Versioned routes
                     .route("/v{version}/{tail:.*}", web::route().to(xiranet::versioning::versioned_gateway_handler));

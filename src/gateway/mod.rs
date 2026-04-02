@@ -196,7 +196,7 @@ pub async fn gateway_handler(
                 response.insert_header((k.as_str(), v.as_str()));
             }
             response.insert_header(("X-Cache", "HIT"));
-            response.insert_header(("X-Proxied-By", "xiraNET"));
+            response.insert_header(("X-Proxied-By", "XIRA"));
             return response.body(cached_body);
         }
     }
@@ -380,7 +380,7 @@ pub async fn gateway_handler(
             for (k, v) in &proxy_result.headers {
                 response.insert_header((k.as_str(), v.as_str()));
             }
-            response.insert_header(("X-Proxied-By", "xiraNET"));
+            response.insert_header(("X-Proxied-By", "XIRA"));
             response.insert_header(("X-Cache", "MISS"));
             // Response transform uygula
             rules.apply_response_headers(&mut response);

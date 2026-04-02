@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use dashmap::DashMap;
 
-/// Plugin trait — tüm xiraNET pluginleri bunu implement eder
+/// Plugin trait — tüm XIRA pluginleri bunu implement eder
 #[async_trait]
 pub trait XiraPlugin: Send + Sync {
     /// Plugin adı

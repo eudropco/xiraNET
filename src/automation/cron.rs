@@ -117,17 +117,26 @@ impl CronScheduler {
         }
     }
 
-    /// SQLite'a job persist et
+    /// SQLite'a job persist et (parameterized — SQL injection safe)
     fn persist_job(&self, job: &CronJob) {
         if let Some(ref storage) = self.storage {
             let schedule_json = serde_json::to_string(&job.schedule).unwrap_or_default();
-            let last_status = job.last_status.map(|s| s.to_string()).unwrap_or("NULL".to_string());
-            let _ = storage.execute_raw(&format!(
-                "INSERT OR REPLACE INTO cron_jobs (id, name, schedule, url, method, enabled, last_run, next_run, run_count, last_status, failure_count) VALUES ('{}', '{}', '{}', '{}', '{}', {}, {}, {}, {}, {}, {})",
-                job.id, job.name.replace('\'', "''"), schedule_json.replace('\'', "''"),
-                job.url.replace('\'', "''"), job.method, if job.enabled { 1 } else { 0 },
-                job.last_run, job.next_run, job.run_count, last_status, job.failure_count,
-            ));
+            let _ = storage.execute_params(
+                "INSERT OR REPLACE INTO cron_jobs (id, name, schedule, url, method, enabled, last_run, next_run, run_count, last_status, failure_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                &[
+                    &job.id as &dyn rusqlite::types::ToSql,
+                    &job.name,
+                    &schedule_json,
+                    &job.url,
+                    &job.method,
+                    &(if job.enabled { 1i64 } else { 0 }),
+                    &(job.last_run as i64),
+                    &(job.next_run as i64),
+                    &(job.run_count as i64),
+                    &job.last_status.map(|s| s as i64) as &dyn rusqlite::types::ToSql,
+                    &(job.failure_count as i64),
+                ],
+            );
         }
     }
 
@@ -202,10 +211,10 @@ impl CronScheduler {
         self.jobs.read().await.clone()
     }
 
-    /// İş kaldır
+    /// İş kaldır (parameterized — SQL injection safe)
     pub async fn remove_job(&self, id: &str) -> bool {
         if let Some(ref storage) = self.storage {
-            let _ = storage.execute_raw(&format!("DELETE FROM cron_jobs WHERE id = '{}'", id));
+            let _ = storage.execute_params("DELETE FROM cron_jobs WHERE id = ?1", &[&id as &dyn rusqlite::types::ToSql]);
         }
         let mut jobs = self.jobs.write().await;
         let len = jobs.len();

@@ -77,7 +77,7 @@ pub fn print_cert_generation_help() {
     println!("Generate self-signed TLS certificates for testing:");
     println!();
     println!("  # Generate CA key and cert");
-    println!("  openssl req -x509 -newkey rsa:4096 -keyout ca-key.pem -out ca-cert.pem -days 365 -nodes -subj '/CN=xiraNET CA'");
+    println!("  openssl req -x509 -newkey rsa:4096 -keyout ca-key.pem -out ca-cert.pem -days 365 -nodes -subj '/CN=XIRA CA'");
     println!();
     println!("  # Generate server key and CSR");
     println!("  openssl req -newkey rsa:4096 -keyout server-key.pem -out server.csr -nodes -subj '/CN=localhost'");
