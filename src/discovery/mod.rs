@@ -154,11 +154,23 @@ async fn discover_consul(
 /// Format: `_<service>._tcp.<domain>` SRV kaydı taranır. Her hedef için
 /// ayrı bir prefix (`/<service>`) altında upstream'ler register edilir.
 async fn discover_dns(registry: &ServiceRegistry, domain: &str) {
-    use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-    use hickory_resolver::TokioAsyncResolver;
+    // hickory-resolver 0.26 API: TokioResolver builder pattern.
+    use hickory_resolver::TokioResolver;
 
-    let resolver =
-        TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+    let builder = match TokioResolver::builder_tokio() {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "DNS resolver builder init failed");
+            return;
+        }
+    };
+    let resolver = match builder.build() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "DNS resolver build failed");
+            return;
+        }
+    };
 
     // domain örneği: "services.example.com" — bu durumda biz alt servisleri keşfetmek için
     // _<service>._tcp.<domain> SRV kaydını tarayamayız çünkü servis isimlerini bilmiyoruz.
@@ -175,10 +187,15 @@ async fn discover_dns(registry: &ServiceRegistry, domain: &str) {
     };
 
     let mut targets: Vec<(String, u16)> = Vec::new();
-    for rec in lookup.iter() {
-        let target = rec.target().to_string();
-        let port = rec.port();
-        targets.push((target.trim_end_matches('.').to_string(), port));
+    for rec in lookup.answers() {
+        // hickory 0.26 API: Record.try_borrow::<SRV>() ile typed RecordRef.
+        // SRV struct'ında target/port public field — fn değil.
+        if let Some(srv_ref) = rec.try_borrow::<hickory_resolver::proto::rr::rdata::SRV>() {
+            let srv = srv_ref.data();
+            let target = srv.target.to_string();
+            let port = srv.port;
+            targets.push((target.trim_end_matches('.').to_string(), port));
+        }
     }
 
     if targets.is_empty() {

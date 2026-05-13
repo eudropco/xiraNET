@@ -1,0 +1,26 @@
+# cargo-audit ignore policy — Phase 3.1 review (v3.0.0)
+#
+# Buradaki advisory'ler kasıtlı ve gerekçeli olarak ignore edilmiştir. CI'da
+# `cargo audit` çalıştırılır; bu liste değişirse PR ile review edilmeli.
+
+[advisories]
+ignore = [
+    # rustls-pemfile unmaintained — eşdeğer drop-in replacement henüz yok.
+    # actix-tls + reqwest dep zinciri; biz doğrudan kullanmıyoruz. Yeni
+    # rustls 0.24 wave geldiğinde tekrar değerlendir.
+    "RUSTSEC-2025-0134",
+
+    # lru `IterMut` unsound. Bizim ResponseCache `IterMut` kullanmıyor —
+    # sadece get/put (LruCache::get_mut tek-eleman, IterMut değil).
+    "RUSTSEC-2026-0002",
+
+    # rand `rng()` custom logger ile unsound. xiraNET custom logger
+    # kurmuyor (tracing-subscriber default) — koşul karşılanmıyor.
+    # Yeni advisory wave'i ile (rand 0.9 + argon2 0.6) tekrar değerlendir.
+    "RUSTSEC-2026-0097",
+    "RUSTSEC-2026-0098", # name constraints — rustls-webpki güncel (>=0.103.12 var)
+    "RUSTSEC-2026-0099", # wildcard names — aynı, güncel
+
+    # unicode-segmentation yanked — derive_more → actix-web zincirinden gelir.
+    # Direct dep değil; actix-web upgrade'iyle çözülecek.
+]

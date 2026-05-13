@@ -68,6 +68,9 @@ lazy_static = "1"
 bytes = "1"
 futures-util = "0.3"
 async-trait = "0.1"
+# NOTE: rand 0.8'de kalıyor çünkü argon2 0.5 password-hash 0.5 → rand_core 0.6 zinciri.
+# RUSTSEC-2026-0097 sadece custom logger + rand::rng() kullanılırsa unsound; bizim
+# code custom logger kurmadan rand::random() çağırıyor — geçerli değil.
 rand = "0.8"
 
 # SQLite persistence
@@ -81,11 +84,11 @@ rustls = "0.23"
 rustls-pemfile = "2"
 tokio-rustls = "0.26"
 
-# Prometheus metrics
-prometheus = "0.13"
+# Prometheus metrics — 0.14 ile protobuf 3.x'a geçiş (RUSTSEC-2024-0437 fix)
+prometheus = "0.14"
 
-# Response caching
-lru = "0.12"
+# Response caching — 0.13+ Stacked Borrows fix (RUSTSEC-2026-0002)
+lru = "0.13"
 
 # JSON Schema validation
 jsonschema = "0.28"
@@ -114,8 +117,8 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 # Regex (body transform)
 regex = "1"
 
-# DNS SRV resolver (service discovery)
-hickory-resolver = "0.24"
+# DNS SRV resolver (service discovery) — 0.26 fixes RUSTSEC-2026-0119 (O(n²) name encoding)
+hickory-resolver = "0.26"
 
 # Error handling
 thiserror = "1"
