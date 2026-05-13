@@ -49,7 +49,7 @@ services:
     profiles:
       - monitoring
 
-  # Grafana (optional) — pinned version
+  # Grafana (optional) — pinned version + auto-provisioned dashboards
   grafana:
     image: grafana/grafana:11.4.0
     container_name: xiranet-grafana
@@ -58,6 +58,12 @@ services:
     environment:
       # Admin parolası ENV ile verilmeli; default 'admin' deploy'a sızmasın.
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      # Auto-provisioned datasource + dashboards (read-only mounts)
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
     networks:

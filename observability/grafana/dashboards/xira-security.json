@@ -1,0 +1,196 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "xiraNET v3.0 security & audit observability — WAF, SSRF, auth rejects, MFA, session lifecycle.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Auth Rejects (5m rate)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (category) (rate(xiranet_auth_rejects_total[5m]))",
+          "legendFormat": "{{category}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "WAF Blocks (5m rate)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(xiranet_waf_blocks_total[5m]))",
+          "legendFormat": "block: {{rule}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (rule) (rate(xiranet_waf_detects_total[5m]))",
+          "legendFormat": "detect-only: {{rule}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "SSRF Rejects (1h total)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 10}
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["sum"]},
+        "orientation": "horizontal"
+      },
+      "targets": [
+        {
+          "expr": "sum by (category) (increase(xiranet_ssrf_rejects_total[1h]))",
+          "legendFormat": "{{category}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "JWT Rejects (5m rate)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.1},
+              {"color": "red", "value": 1}
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(xiranet_jwt_rejects_total[5m])",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "MFA Events (15m rate)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "bars", "fillOpacity": 50},
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (event) (rate(xiranet_mfa_events_total[15m]))",
+          "legendFormat": "{{event}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Session Lifecycle (5m rate)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 14},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (event) (rate(xiranet_session_events_total[5m]))",
+          "legendFormat": "{{event}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "DB Persist Errors (1h total)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 14},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "bars", "fillOpacity": 50},
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (table) (increase(xiranet_db_persist_errors_total[1h]))",
+          "legendFormat": "{{table}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["xiranet", "security", "audit"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "xiraNET — Security & Audit",
+  "uid": "xiranet-security",
+  "version": 1,
+  "weekStart": ""
+}

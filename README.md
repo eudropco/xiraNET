@@ -445,6 +445,31 @@ Container `xira` user (uid 10001) altında çalışır; `cap_drop ALL` + `NET_BI
 docker compose --profile monitoring up -d
 ```
 
+`--profile monitoring` ile Prometheus (`:9090`) ve Grafana (`:3000`) ayağa kalkar.
+Grafana auto-provisioning ile iki dashboard hazır gelir:
+
+- **xiraNET — Security & Audit** (`xiranet-security`) — auth rejects, WAF blocks/detects,
+  SSRF rejects, JWT rejects, MFA events, session lifecycle, DB persist errors
+- **xiraNET — Gateway Operations** (`xiranet-gateway`) — HTTP request rate by status,
+  latency P50/P95/P99, services up/down, circuit breaker opens, cache hit rate, proxy errors
+
+Datasource (`prometheus` → `http://prometheus:9090`) ve dashboard provisioning
+config'leri `observability/grafana/` altında repo'da.
+
+## Konfigürasyon doğrulama
+
+```bash
+# Pre-deploy gate (CI'da çalıştırılabilir)
+xira system validate --config xiranet.toml
+
+# Boot edilirse aynı kontrol Serve içinde de çalışır — error varsa process exit 1
+# olur, log'da `xira::config` target'lı error/warning satırları görünür.
+```
+
+Doğrulama kapsamı: default API key + dış bind (block), JWT default-secret/zayıf
+secret/RS256 PEM, CORS empty origins, duplicate service prefix, TLS dosya varlığı,
+rate-limit/cache sanity. Detay için `XiraConfig::validate()`.
+
 ## CHANGELOG — v3.0.0 audit highlights
 
 Bu sürüm geniş bir security/correctness audit'inden çıktı. Tam liste için commit history'e (`security:`, `feat:`, `ops:`, `chore:` prefix'li commit'ler) bak. Öne çıkanlar:
