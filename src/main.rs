@@ -613,44 +613,11 @@ async fn main() -> std::io::Result<()> {
                         web::get().to(xiranet::admin::handlers::gateway_health),
                     )
                     // Auth endpoints — login + MFA-login public, geri kalan SessionAuth ile protected.
+                    // Route sırası: spesifik prefix'ler (/admin/, /mfa/*) önce, sonra session'lı genel.
                     .service(
                         web::scope("/auth")
-                            .route(
-                                "/login",
-                                web::post().to(xiranet::admin::v2_handlers::login_user),
-                            )
-                            .route(
-                                "/mfa/login",
-                                web::post().to(xiranet::admin::v2_handlers::mfa_login),
-                            )
-                            .service(
-                                web::scope("")
-                                    .wrap(xiranet::middleware::session::SessionAuth::new(
-                                        session_manager.clone(),
-                                    ))
-                                    .route("/me", web::get().to(xiranet::admin::v2_handlers::me))
-                                    .route(
-                                        "/logout",
-                                        web::post().to(xiranet::admin::v2_handlers::logout),
-                                    )
-                                    .route(
-                                        "/logout-all",
-                                        web::post().to(xiranet::admin::v2_handlers::logout_all),
-                                    )
-                                    .route(
-                                        "/sessions",
-                                        web::get().to(xiranet::admin::v2_handlers::my_sessions),
-                                    )
-                                    .route(
-                                        "/mfa/enroll",
-                                        web::post().to(xiranet::admin::v2_handlers::mfa_enroll),
-                                    )
-                                    .route(
-                                        "/mfa/verify",
-                                        web::post().to(xiranet::admin::v2_handlers::mfa_verify),
-                                    ),
-                            )
-                            // Role-protected user administration (SuperAdmin)
+                            // Role-protected user administration — SessionAuth + RequireRole(SuperAdmin)
+                            // ÖNCE deklare edilir, aksi halde session-only sub-scope path'i yutar.
                             .service(
                                 web::scope("/admin")
                                     .wrap(xiranet::middleware::require_role::RequireRole::new(
@@ -684,6 +651,42 @@ async fn main() -> std::io::Result<()> {
                                         "/users/{id}/logout-all",
                                         web::post()
                                             .to(xiranet::admin::v2_handlers::admin_logout_all),
+                                    ),
+                            )
+                            .route(
+                                "/login",
+                                web::post().to(xiranet::admin::v2_handlers::login_user),
+                            )
+                            .route(
+                                "/mfa/login",
+                                web::post().to(xiranet::admin::v2_handlers::mfa_login),
+                            )
+                            // Session-protected (kullanıcının kendi context'i)
+                            .service(
+                                web::scope("")
+                                    .wrap(xiranet::middleware::session::SessionAuth::new(
+                                        session_manager.clone(),
+                                    ))
+                                    .route("/me", web::get().to(xiranet::admin::v2_handlers::me))
+                                    .route(
+                                        "/logout",
+                                        web::post().to(xiranet::admin::v2_handlers::logout),
+                                    )
+                                    .route(
+                                        "/logout-all",
+                                        web::post().to(xiranet::admin::v2_handlers::logout_all),
+                                    )
+                                    .route(
+                                        "/sessions",
+                                        web::get().to(xiranet::admin::v2_handlers::my_sessions),
+                                    )
+                                    .route(
+                                        "/mfa/enroll",
+                                        web::post().to(xiranet::admin::v2_handlers::mfa_enroll),
+                                    )
+                                    .route(
+                                        "/mfa/verify",
+                                        web::post().to(xiranet::admin::v2_handlers::mfa_verify),
                                     ),
                             ),
                     )
