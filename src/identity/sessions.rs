@@ -11,7 +11,6 @@ use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use subtle::ConstantTimeEq;
 
 pub struct SessionManager {
     /// hashed_token → session
@@ -351,12 +350,6 @@ impl SessionManager {
     pub fn total_count(&self) -> usize {
         self.sessions.len()
     }
-}
-
-/// Constant-time eşitlik testi (timing-attack koruması için yardımcı).
-#[allow(dead_code)]
-pub fn constant_time_eq(a: &str, b: &str) -> bool {
-    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 fn detect_device(ua: &str) -> String {

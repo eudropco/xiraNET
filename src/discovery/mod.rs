@@ -19,18 +19,14 @@ pub enum DiscoveryBackend {
     Static,
 }
 
-/// Consul service response
+/// Consul service response — sadece kullandığımız alanları deserialize ediyoruz.
+/// Extra JSON field'ları serde tarafından sessizce ignore edilir.
 #[derive(serde::Deserialize)]
-#[allow(dead_code)]
 struct ConsulService {
-    #[serde(rename = "ServiceName")]
-    service_name: String,
     #[serde(rename = "ServiceAddress")]
     service_address: String,
     #[serde(rename = "ServicePort")]
     service_port: u16,
-    #[serde(rename = "ServiceTags")]
-    service_tags: Vec<String>,
 }
 
 /// Service discovery daemon

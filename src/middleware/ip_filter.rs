@@ -23,43 +23,6 @@ impl IpFilter {
             enabled,
         }
     }
-
-    #[allow(dead_code)]
-    fn is_allowed(&self, ip: &str) -> bool {
-        if !self.enabled {
-            return true;
-        }
-
-        // Blacklist kontrolü
-        if self.blacklist.contains(ip) {
-            return false;
-        }
-
-        // CIDR kontrolü (basit)
-        for blocked in self.blacklist.iter() {
-            if ip_matches_cidr(ip, blocked) {
-                return false;
-            }
-        }
-
-        // Whitelist boşsa herkese izin ver
-        if self.whitelist.is_empty() {
-            return true;
-        }
-
-        // Whitelist'te mi kontrol et
-        if self.whitelist.contains(ip) {
-            return true;
-        }
-
-        for allowed in self.whitelist.iter() {
-            if ip_matches_cidr(ip, allowed) {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 /// Basit CIDR eşleştirmesi (ör: 192.168.0.0/16)
@@ -183,6 +146,9 @@ where
             .unwrap_or_else(|| "unknown".to_string());
 
         if !self.is_allowed(&ip) {
+            crate::metrics::AUTH_REJECTS
+                .with_label_values(&["ip_blocked"])
+                .inc();
             tracing::warn!("IP blocked: {}", ip);
             return Box::pin(async move {
                 let response = HttpResponse::Forbidden().json(serde_json::json!({
