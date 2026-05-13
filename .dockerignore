@@ -1,0 +1,50 @@
+# Build artifacts
+target/
+**/target/
+
+# Local data
+data/
+logs/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets / local config
+.env
+.env.*
+*.pem
+*.key
+certs/
+secrets/
+
+# Git + IDE
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# Documentation / non-build
+*.md
+docs/
+ONBOARDING.md
+README.md
+
+# Tests aren't needed for production image build
+tests/
+
+# Backup / scratch
+*.bak
+*.orig
+*~

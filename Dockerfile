@@ -1,34 +1,48 @@
-# Multi-stage Dockerfile for xiraNET v2.1.0
-FROM rust:1-bookworm AS builder
+# Multi-stage Dockerfile for xiraNET v3.0.0
+# Pinned base images for reproducibility. Update digests via `docker pull` then `docker inspect`.
+FROM rust:1.88-bookworm AS builder
 
 WORKDIR /app
 
 # Sistem bağımlılıkları
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Dependency cache layer
+# Dependency cache layer — workspace crates dahil
 COPY Cargo.toml Cargo.lock* ./
-RUN mkdir src && echo "fn main(){}" > src/main.rs && echo "" > src/lib.rs
-RUN cargo build --release 2>/dev/null || true
-RUN rm -rf src
+COPY crates/ crates/
+# Geçici binary stub'u: src/main.rs ve src/lib.rs için thin placeholder
+RUN mkdir -p src \
+    && echo "fn main(){}" > src/main.rs \
+    && echo "" > src/lib.rs \
+    && cargo build --release --bin xiranet 2>/dev/null || true \
+    && rm -rf src
 
-# Asıl kaynak kodu kopyala ve derle
+# Asıl kaynak kodu kopyala ve derle (workspace member'lar değişmediyse cache hit)
 COPY src/ src/
-COPY tests/ tests/
-RUN cargo build --release
+RUN cargo build --release --bin xiranet
 
-# Runtime image
+# Runtime image — minimal, non-root
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    # Non-root user
+    && groupadd --system --gid 10001 xira \
+    && useradd  --system --uid 10001 --gid xira --home-dir /app --shell /usr/sbin/nologin xira
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/xiranet /usr/local/bin/xiranet
 COPY xiranet.toml /app/xiranet.toml
 
-# Data ve log dizinleri
-RUN mkdir -p /app/data /app/logs /app/plugins /app/certs
+# Data ve log dizinleri — non-root user'a chown
+RUN mkdir -p /app/data /app/logs /app/plugins /app/certs \
+    && chown -R xira:xira /app
+
+USER xira
 
 EXPOSE 9000 9001
 
