@@ -12,6 +12,7 @@ pub mod oauth2;
 pub mod oauth2_gateway;
 pub mod rate_limit;
 pub mod redis_rate_limit;
+pub mod require_role;
 pub mod session;
 pub mod tenant;
 pub mod validation;

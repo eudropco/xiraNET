@@ -186,6 +186,28 @@ curl http://localhost:9000/auth/me \
 | `POST` | `/auth/mfa/enroll` | TOTP enrollment başlat (QR URL döner) |
 | `POST` | `/auth/mfa/verify` | Enrollment'ı 6-haneli kod ile doğrula |
 
+### RBAC Admin Endpoints (`/auth/admin/*`, **SuperAdmin role gerekir**)
+
+`SessionAuth` + `RequireRole(SuperAdmin)` middleware zinciri. API key tier'ından
+bağımsız; user-context işlemler için (kullanıcı yönetimi, force logout, MFA recovery).
+
+| Method | Endpoint | Açıklama |
+|--------|----------|----------|
+| `GET` | `/auth/admin/users` | Tüm kullanıcıları listele |
+| `PUT` | `/auth/admin/users/{id}/role` | Kullanıcı rolünü değiştir (tüm session'ları invalidate edilir) |
+| `POST` | `/auth/admin/users/{id}/disable` | Kullanıcıyı devre dışı bırak + session'larını kapat |
+| `POST` | `/auth/admin/users/{id}/mfa/disable` | MFA recovery (kullanıcı erişimini kaybettiğinde) |
+| `POST` | `/auth/admin/users/{id}/logout-all` | Başka kullanıcıyı force logout |
+
+**Role hierarchy** (üst alttakileri kapsar):
+```
+SuperAdmin (100) > Admin (80) > Developer (60) > Service (40) > Viewer (20)
+                                                                  Custom (0, explicit)
+```
+
+`Custom(name)` rolü hierarchy'e dahil değildir — eşit string-match veya explicit
+permission grant gerekir.
+
 ## Admin API
 
 Tüm `/xira/*` endpoint'leri `X-Api-Key` header gerektirir. Karşılaştırma `subtle::ConstantTimeEq` ile timing-safe.

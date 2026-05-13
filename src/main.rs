@@ -649,6 +649,42 @@ async fn main() -> std::io::Result<()> {
                                         "/mfa/verify",
                                         web::post().to(xiranet::admin::v2_handlers::mfa_verify),
                                     ),
+                            )
+                            // Role-protected user administration (SuperAdmin)
+                            .service(
+                                web::scope("/admin")
+                                    .wrap(xiranet::middleware::require_role::RequireRole::new(
+                                        xiranet::identity::users::UserRole::SuperAdmin,
+                                        user_manager.clone(),
+                                    ))
+                                    .wrap(xiranet::middleware::session::SessionAuth::new(
+                                        session_manager.clone(),
+                                    ))
+                                    .route(
+                                        "/users",
+                                        web::get()
+                                            .to(xiranet::admin::v2_handlers::admin_list_users),
+                                    )
+                                    .route(
+                                        "/users/{id}/role",
+                                        web::put()
+                                            .to(xiranet::admin::v2_handlers::admin_update_role),
+                                    )
+                                    .route(
+                                        "/users/{id}/disable",
+                                        web::post()
+                                            .to(xiranet::admin::v2_handlers::admin_disable_user),
+                                    )
+                                    .route(
+                                        "/users/{id}/mfa/disable",
+                                        web::post()
+                                            .to(xiranet::admin::v2_handlers::admin_disable_mfa),
+                                    )
+                                    .route(
+                                        "/users/{id}/logout-all",
+                                        web::post()
+                                            .to(xiranet::admin::v2_handlers::admin_logout_all),
+                                    ),
                             ),
                     )
                     // WebSocket (dashboard = authenticated, others = proxy)

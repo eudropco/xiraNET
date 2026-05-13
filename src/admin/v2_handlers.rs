@@ -233,6 +233,116 @@ pub async fn my_sessions(
     HttpResponse::Ok().json(serde_json::json!({"sessions": safe, "count": safe.len()}))
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Role-protected user administration (SuperAdmin)
+// ═══════════════════════════════════════════════════════════════
+
+/// GET /auth/admin/users — tüm kullanıcıları listele (RBAC: SuperAdmin)
+pub async fn admin_list_users(
+    users: web::Data<Arc<UserManager>>,
+) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "users": users.list_users(),
+        "count": users.user_count(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateRoleRequest {
+    pub role: String,
+}
+
+/// PUT /auth/admin/users/{id}/role — kullanıcı rolünü değiştir (RBAC: SuperAdmin)
+pub async fn admin_update_role(
+    users: web::Data<Arc<UserManager>>,
+    sessions: web::Data<Arc<SessionManager>>,
+    path: web::Path<String>,
+    body: web::Json<UpdateRoleRequest>,
+) -> HttpResponse {
+    let target_id = path.into_inner();
+    let role = match body.role.as_str() {
+        "SuperAdmin" => crate::identity::users::UserRole::SuperAdmin,
+        "Admin" => crate::identity::users::UserRole::Admin,
+        "Developer" => crate::identity::users::UserRole::Developer,
+        "Service" => crate::identity::users::UserRole::Service,
+        "Viewer" => crate::identity::users::UserRole::Viewer,
+        other => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Unknown role: {other}"),
+            }));
+        }
+    };
+    if !users.update_role(&target_id, role.clone()) {
+        return HttpResponse::NotFound().json(serde_json::json!({"error": "user not found"}));
+    }
+    // Privilege change → tüm session'larını kapat (force re-auth with new role)
+    let invalidated = sessions.invalidate_all(&target_id);
+    tracing::warn!(
+        audit = "role_change",
+        user_id = %target_id,
+        new_role = %role.as_str(),
+        sessions_invalidated = invalidated,
+        "User role changed via admin endpoint"
+    );
+    HttpResponse::Ok().json(serde_json::json!({
+        "updated": true,
+        "sessions_invalidated": invalidated,
+    }))
+}
+
+/// POST /auth/admin/users/{id}/disable — kullanıcıyı devre dışı bırak (RBAC: SuperAdmin)
+pub async fn admin_disable_user(
+    users: web::Data<Arc<UserManager>>,
+    sessions: web::Data<Arc<SessionManager>>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let target_id = path.into_inner();
+    if !users.disable_user(&target_id) {
+        return HttpResponse::NotFound().json(serde_json::json!({"error": "user not found"}));
+    }
+    let invalidated = sessions.invalidate_all(&target_id);
+    tracing::warn!(
+        audit = "user_disabled",
+        user_id = %target_id,
+        sessions_invalidated = invalidated,
+    );
+    HttpResponse::Ok().json(serde_json::json!({
+        "disabled": true,
+        "sessions_invalidated": invalidated,
+    }))
+}
+
+/// POST /auth/admin/users/{id}/mfa/disable — kullanıcının MFA'sını kapat (recovery, RBAC: SuperAdmin)
+pub async fn admin_disable_mfa(
+    users: web::Data<Arc<UserManager>>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let target_id = path.into_inner();
+    if !users.disable_mfa(&target_id) {
+        return HttpResponse::NotFound().json(serde_json::json!({"error": "user not found"}));
+    }
+    tracing::warn!(
+        audit = "mfa_disabled_by_admin",
+        user_id = %target_id,
+    );
+    HttpResponse::Ok().json(serde_json::json!({"mfa_disabled": true}))
+}
+
+/// POST /auth/admin/users/{id}/logout-all — başka kullanıcıyı force logout (RBAC: SuperAdmin)
+pub async fn admin_logout_all(
+    sessions: web::Data<Arc<SessionManager>>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let target_id = path.into_inner();
+    let count = sessions.invalidate_all(&target_id);
+    tracing::warn!(
+        audit = "force_logout",
+        user_id = %target_id,
+        sessions = count,
+    );
+    HttpResponse::Ok().json(serde_json::json!({"invalidated": count}))
+}
+
 /// POST /auth/logout-all — geçerli kullanıcının TÜM session'larını kapat.
 pub async fn logout_all(
     req: HttpRequest,

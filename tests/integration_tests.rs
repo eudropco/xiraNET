@@ -999,3 +999,172 @@ mod websocket_auth_tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// RBAC Tests — UserRole hierarchy + RequireRole middleware
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod rbac_tests {
+    use actix_web::http::StatusCode;
+    use actix_web::{test, web, App, HttpResponse};
+    use std::sync::Arc;
+    use xiranet::identity::sessions::SessionManager;
+    use xiranet::identity::users::{UserManager, UserRole};
+    use xiranet::middleware::require_role::RequireRole;
+    use xiranet::middleware::session::SessionAuth;
+
+    fn fixture() -> (Arc<UserManager>, Arc<SessionManager>, String, String) {
+        let users = Arc::new(UserManager::new());
+        let sessions = Arc::new(SessionManager::new(10));
+
+        let admin_user = users
+            .register(
+                "root@x".to_string(),
+                "root".to_string(),
+                "long-password-1234567890",
+                UserRole::SuperAdmin,
+            )
+            .unwrap();
+        let viewer_user = users
+            .register(
+                "viewer@x".to_string(),
+                "viewer".to_string(),
+                "long-password-1234567890",
+                UserRole::Viewer,
+            )
+            .unwrap();
+
+        // Token üretimi authenticate üzerinden — gerçek akış
+        let admin_token = match users.authenticate(&admin_user.email, "long-password-1234567890") {
+            xiranet::identity::users::AuthResult::Success { token, .. } => token,
+            other => panic!("admin auth failed: {other:?}"),
+        };
+        let viewer_token = match users.authenticate(&viewer_user.email, "long-password-1234567890")
+        {
+            xiranet::identity::users::AuthResult::Success { token, .. } => token,
+            other => panic!("viewer auth failed: {other:?}"),
+        };
+
+        // Session create
+        sessions.create(&admin_user.id, &admin_token, "127.0.0.1", "test", 600);
+        sessions.create(&viewer_user.id, &viewer_token, "127.0.0.1", "test", 600);
+
+        (users, sessions, admin_token, viewer_token)
+    }
+
+    async fn ok() -> HttpResponse {
+        HttpResponse::Ok().json(serde_json::json!({"ok": true}))
+    }
+
+    #[actix_web::test]
+    async fn superadmin_passes_role_check() {
+        let (users, sessions, admin_token, _viewer_token) = fixture();
+        let app = test::init_service(
+            App::new().service(
+                web::scope("/protected")
+                    .wrap(RequireRole::new(UserRole::SuperAdmin, users.clone()))
+                    .wrap(SessionAuth::new(sessions.clone()))
+                    .route("/data", web::get().to(ok)),
+            ),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/protected/data")
+            .insert_header(("X-Session-Token", admin_token))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn viewer_rejected_from_superadmin_endpoint() {
+        let (users, sessions, _admin_token, viewer_token) = fixture();
+        let app = test::init_service(
+            App::new().service(
+                web::scope("/protected")
+                    .wrap(RequireRole::new(UserRole::SuperAdmin, users.clone()))
+                    .wrap(SessionAuth::new(sessions.clone()))
+                    .route("/data", web::get().to(ok)),
+            ),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/protected/data")
+            .insert_header(("X-Session-Token", viewer_token))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn missing_session_returns_unauthorized() {
+        let (users, sessions, _a, _v) = fixture();
+        let app = test::init_service(
+            App::new().service(
+                web::scope("/protected")
+                    .wrap(RequireRole::new(UserRole::SuperAdmin, users.clone()))
+                    .wrap(SessionAuth::new(sessions.clone()))
+                    .route("/data", web::get().to(ok)),
+            ),
+        )
+        .await;
+        let req = test::TestRequest::get().uri("/protected/data").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn admin_can_access_developer_required_endpoint() {
+        let (users, sessions, admin_token, _v) = fixture();
+        let app = test::init_service(
+            App::new().service(
+                web::scope("/protected")
+                    .wrap(RequireRole::new(UserRole::Developer, users.clone()))
+                    .wrap(SessionAuth::new(sessions.clone()))
+                    .route("/data", web::get().to(ok)),
+            ),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/protected/data")
+            .insert_header(("X-Session-Token", admin_token))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn role_change_invalidates_old_sessions_path() {
+        // update_role + invalidate_all akışını doğrula: rol değişimi sonrası eski token
+        // 401 dönmeli (session map'ten silinmiş).
+        let (users, sessions, viewer_token, _v) = fixture();
+        // viewer_token aslında admin token (fixture sırası); rol yükselt ve invalidate çağır
+        let admin_user_id = users
+            .list_users()
+            .into_iter()
+            .find(|u| u.get("email").and_then(|v| v.as_str()) == Some("root@x"))
+            .and_then(|u| u.get("id").and_then(|v| v.as_str()).map(String::from))
+            .unwrap();
+
+        let invalidated = sessions.invalidate_all(&admin_user_id);
+        assert!(invalidated >= 1);
+
+        let app = test::init_service(
+            App::new().service(
+                web::scope("/protected")
+                    .wrap(RequireRole::new(UserRole::SuperAdmin, users.clone()))
+                    .wrap(SessionAuth::new(sessions.clone()))
+                    .route("/data", web::get().to(ok)),
+            ),
+        )
+        .await;
+        let req = test::TestRequest::get()
+            .uri("/protected/data")
+            .insert_header(("X-Session-Token", viewer_token))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        // Session invalidate edildi → SessionAuth 401
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+}

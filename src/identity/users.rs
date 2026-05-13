@@ -43,7 +43,7 @@ pub struct User {
     pub metadata: std::collections::HashMap<String, String>,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum UserRole {
     SuperAdmin,
     Admin,
@@ -51,6 +51,45 @@ pub enum UserRole {
     Viewer,
     Service,
     Custom(String),
+}
+
+impl UserRole {
+    /// Hierarchy level — büyük olan daha yetkili. Custom her zaman 0 (Viewer ile eşit;
+    /// permissions üzerinden ayrıştırılmalı).
+    pub fn level(&self) -> u8 {
+        match self {
+            UserRole::SuperAdmin => 100,
+            UserRole::Admin => 80,
+            UserRole::Developer => 60,
+            UserRole::Service => 40,
+            UserRole::Viewer => 20,
+            UserRole::Custom(_) => 0,
+        }
+    }
+
+    /// `self` rolü `required` rolünün hak ettiği işlemleri yapabilir mi?
+    /// SuperAdmin her şeyi, Admin Developer'ı kapsar vs. Custom hiçbir built-in
+    /// rolün altına düşmez/üstüne çıkmaz — explicit permission grant'ler gerekir.
+    pub fn satisfies(&self, required: &UserRole) -> bool {
+        if let UserRole::Custom(_) = required {
+            return self == required;
+        }
+        if matches!(self, UserRole::Custom(_)) {
+            return false;
+        }
+        self.level() >= required.level()
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            UserRole::SuperAdmin => "SuperAdmin",
+            UserRole::Admin => "Admin",
+            UserRole::Developer => "Developer",
+            UserRole::Viewer => "Viewer",
+            UserRole::Service => "Service",
+            UserRole::Custom(s) => s.as_str(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -388,6 +427,11 @@ impl UserManager {
 
     pub fn get_user(&self, id: &str) -> Option<User> {
         self.users.get(id).map(|u| u.value().clone())
+    }
+
+    /// Kullanıcının rolünü döndür — middleware role check'i için hızlı erişim.
+    pub fn user_role(&self, id: &str) -> Option<UserRole> {
+        self.users.get(id).map(|u| u.value().role.clone())
     }
 
     /// MFA enrollment başlat: yeni TOTP seed üret, sealed olarak persist et.
