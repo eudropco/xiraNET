@@ -736,6 +736,58 @@ enabled = false
     }
 
     #[test]
+    fn waf_runtime_custom_rule_added_and_blocks() {
+        let s = server();
+        // List baseline
+        let list_before = ureq_get(
+            &format!("{}/xira/security/waf/rules", s.base_url),
+            Some(&s.api_key),
+        )
+        .unwrap();
+        assert_eq!(list_before.status, 200);
+
+        // Add a rule that matches "EVIL-MARKER"
+        let resp = ureq_post_json(
+            &format!("{}/xira/security/waf/rules", s.base_url),
+            Some(&s.api_key),
+            r#"{"pattern": "EVIL-MARKER", "label": "evil-marker"}"#,
+        )
+        .unwrap();
+        assert_eq!(resp.status, 201, "rule add failed: {}", resp.body);
+
+        // Reject bad regex
+        let bad = ureq_post_json(
+            &format!("{}/xira/security/waf/rules", s.base_url),
+            Some(&s.api_key),
+            r#"{"pattern": "[unclosed", "label": "bad"}"#,
+        )
+        .unwrap();
+        assert_eq!(bad.status, 400, "invalid regex must 400: {}", bad.body);
+
+        // List shows the rule
+        let list_after = ureq_get(
+            &format!("{}/xira/security/waf/rules", s.base_url),
+            Some(&s.api_key),
+        )
+        .unwrap();
+        assert!(list_after.body.contains("evil-marker"));
+
+        // Delete the rule — id integer (POST response: {"id":N,...})
+        let id_idx = resp.body.find("\"id\":").expect("id field");
+        let after = &resp.body[id_idx + 5..];
+        let end = after.find([',', '}']).expect("id terminator");
+        let id_str = after[..end].trim();
+        let del = ureq_with_header(
+            "DELETE",
+            &format!("{}/xira/security/waf/rules/{id_str}", s.base_url),
+            &[("X-Api-Key", &s.api_key)],
+            None,
+        )
+        .unwrap();
+        assert_eq!(del.status, 200, "delete failed: {}", del.body);
+    }
+
+    #[test]
     fn rbac_viewer_cannot_list_users_admin() {
         let s = server();
         let nano = std::time::SystemTime::now()

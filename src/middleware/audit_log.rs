@@ -25,9 +25,9 @@ pub struct AuditEntry {
 impl AuditLogger {
     pub fn new(storage: Option<Arc<SqliteStorage>>, enabled: bool) -> Self {
         if enabled {
-            // Audit tablosu oluştur
             if let Some(ref s) = storage {
-                let _ = s.execute_raw(
+                // 1) Tabloyu oluştur
+                if let Err(e) = s.execute_raw(
                     "CREATE TABLE IF NOT EXISTS audit_log (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         timestamp TEXT NOT NULL,
@@ -43,8 +43,35 @@ impl AuditLogger {
                         response_size INTEGER,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )",
-                );
-                tracing::info!("Audit log table initialized");
+                ) {
+                    tracing::warn!(error = %e, "audit_log table create failed");
+                }
+
+                // 2) Append-only trigger'lar: UPDATE ve DELETE reddedilir.
+                //    DB'ye yazma erişimi olan bir saldırgan bile audit entry'lerini
+                //    silemez/değiştiremez. ALTER TABLE veya DROP TABLE hala
+                //    mümkün — tam tamper-evident için WORM volume veya remote
+                //    syslog ek olarak önerilir.
+                if let Err(e) = s.execute_raw(
+                    "CREATE TRIGGER IF NOT EXISTS audit_log_no_update
+                     BEFORE UPDATE ON audit_log
+                     BEGIN
+                         SELECT RAISE(ABORT, 'audit_log is append-only: UPDATE forbidden');
+                     END;",
+                ) {
+                    tracing::warn!(error = %e, "audit_log UPDATE trigger create failed");
+                }
+                if let Err(e) = s.execute_raw(
+                    "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete
+                     BEFORE DELETE ON audit_log
+                     BEGIN
+                         SELECT RAISE(ABORT, 'audit_log is append-only: DELETE forbidden');
+                     END;",
+                ) {
+                    tracing::warn!(error = %e, "audit_log DELETE trigger create failed");
+                }
+
+                tracing::info!("Audit log table initialized (append-only triggers active)");
             }
         }
         Self { storage, enabled }

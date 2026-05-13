@@ -92,9 +92,11 @@ fn start_runtime_config_sync(
     response_cache: Arc<ResponseCache>,
     cb_manager: CircuitBreakerManager,
     alert_manager: AlertManager,
+    waf: Arc<Waf>,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut last_waf_patterns_hash: u64 = 0;
 
         loop {
             interval.tick().await;
@@ -117,6 +119,22 @@ fn start_runtime_config_sync(
                 config.alerting.on_service_down,
                 config.alerting.on_service_up,
             );
+
+            // WAF custom patterns hot-reload — değişiklik varsa yeniden compile et.
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for p in &config.waf.custom_block_patterns {
+                p.hash(&mut h);
+            }
+            let new_hash = h.finish();
+            if new_hash != last_waf_patterns_hash {
+                last_waf_patterns_hash = new_hash;
+                waf.load_custom_patterns_from_strings(&config.waf.custom_block_patterns);
+                tracing::info!(
+                    "WAF custom patterns hot-reloaded ({} rule(s))",
+                    config.waf.custom_block_patterns.len()
+                );
+            }
         }
     });
 }
@@ -230,14 +248,6 @@ async fn main() -> std::io::Result<()> {
             let shared_config = Arc::new(tokio::sync::RwLock::new(xira_config.clone()));
             let config_path = config.clone();
             xiranet::config::start_config_watcher(config_path, shared_config.clone());
-            start_runtime_config_sync(
-                shared_config.clone(),
-                rate_limiter.clone(),
-                response_cache.clone(),
-                cb_manager.clone(),
-                alert_manager.clone(),
-            );
-
             // ═══ v2.1.0 — Domain State (config-driven) ═══
             let waf_mode = if xira_config.waf.mode == "detect_only" {
                 WafMode::DetectOnly
@@ -245,6 +255,16 @@ async fn main() -> std::io::Result<()> {
                 WafMode::Block
             };
             let waf = Arc::new(Waf::new(xira_config.waf.enabled, waf_mode));
+            waf.load_custom_patterns_from_strings(&xira_config.waf.custom_block_patterns);
+
+            start_runtime_config_sync(
+                shared_config.clone(),
+                rate_limiter.clone(),
+                response_cache.clone(),
+                cb_manager.clone(),
+                alert_manager.clone(),
+                waf.clone(),
+            );
             let bot_detector = Arc::new(BotDetector::new(
                 xira_config.bot_detection.enabled,
                 xira_config.bot_detection.block_bots,

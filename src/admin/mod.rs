@@ -143,6 +143,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             // ═══ Security (v2.0) ═══
             .route("/security/waf", web::get().to(v2_handlers::get_waf_stats))
+            .route(
+                "/security/waf/rules",
+                web::get().to(v2_handlers::list_waf_rules),
+            )
+            .route(
+                "/security/waf/rules",
+                web::post().to(v2_handlers::add_waf_rule),
+            )
+            .route(
+                "/security/waf/rules/{id}",
+                web::delete().to(v2_handlers::delete_waf_rule),
+            )
             .route("/security/bots", web::get().to(v2_handlers::get_bot_stats))
             .route("/security/audit", web::get().to(v2_handlers::get_audit_log))
             // ═══ Advanced Metrics (v2.0) ═══

@@ -1363,3 +1363,77 @@ mod rbac_tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Audit log append-only — SQLite trigger verify
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod audit_append_only_tests {
+    use std::sync::Arc;
+    use xiranet::middleware::audit_log::AuditLogger;
+    use xiranet::registry::storage::SqliteStorage;
+
+    fn temp_db() -> Arc<SqliteStorage> {
+        let path = std::env::temp_dir().join(format!(
+            "xiranet-audit-trigger-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        Arc::new(SqliteStorage::new(path.to_str().unwrap()).unwrap())
+    }
+
+    #[test]
+    fn audit_log_rejects_update() {
+        let storage = temp_db();
+        let _logger = AuditLogger::new(Some(storage.clone()), true);
+
+        // Insert a row
+        storage
+            .execute_raw(
+                "INSERT INTO audit_log (timestamp, ip, method, path, status) VALUES ('2026-01-01', '127.0.0.1', 'GET', '/', 200)",
+            )
+            .unwrap();
+
+        // UPDATE → must error
+        let result = storage.execute_raw(
+            "UPDATE audit_log SET status = 999 WHERE ip = '127.0.0.1'",
+        );
+        assert!(result.is_err(), "UPDATE on audit_log must be rejected by trigger");
+        let err_str = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_str.contains("append-only") || err_str.contains("UPDATE forbidden"),
+            "expected append-only message, got: {err_str}"
+        );
+    }
+
+    #[test]
+    fn audit_log_rejects_delete() {
+        let storage = temp_db();
+        let _logger = AuditLogger::new(Some(storage.clone()), true);
+
+        storage
+            .execute_raw(
+                "INSERT INTO audit_log (timestamp, ip, method, path, status) VALUES ('2026-01-01', '127.0.0.1', 'GET', '/', 200)",
+            )
+            .unwrap();
+
+        let result = storage.execute_raw("DELETE FROM audit_log WHERE ip = '127.0.0.1'");
+        assert!(result.is_err(), "DELETE on audit_log must be rejected by trigger");
+        let err_str = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_str.contains("append-only") || err_str.contains("DELETE forbidden"),
+            "expected append-only message, got: {err_str}"
+        );
+    }
+
+    #[test]
+    fn audit_log_allows_insert() {
+        let storage = temp_db();
+        let _logger = AuditLogger::new(Some(storage.clone()), true);
+
+        let result = storage.execute_raw(
+            "INSERT INTO audit_log (timestamp, ip, method, path, status) VALUES ('2026-01-02', '127.0.0.1', 'POST', '/foo', 201)",
+        );
+        assert!(result.is_ok(), "INSERT must succeed: {result:?}");
+    }
+}

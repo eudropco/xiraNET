@@ -824,6 +824,50 @@ use crate::middleware::audit_log::AuditLogger;
 use crate::middleware::bot_detect::BotDetector;
 use crate::middleware::waf::Waf;
 
+/// GET /xira/security/waf/rules — runtime custom rule listesi
+pub async fn list_waf_rules(waf: web::Data<Arc<Waf>>) -> HttpResponse {
+    let rules = waf.list_custom_patterns();
+    HttpResponse::Ok().json(serde_json::json!({
+        "rules": rules,
+        "count": rules.len(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AddWafRuleRequest {
+    pub pattern: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// POST /xira/security/waf/rules — yeni custom rule ekle (regex doğrulanır)
+pub async fn add_waf_rule(
+    waf: web::Data<Arc<Waf>>,
+    body: web::Json<AddWafRuleRequest>,
+) -> HttpResponse {
+    match waf.add_custom_pattern(&body.pattern, &body.label) {
+        Ok(id) => {
+            tracing::warn!(audit = "waf_rule_added", id, label = %body.label, "WAF custom rule added");
+            HttpResponse::Created().json(serde_json::json!({"id": id, "label": body.label}))
+        }
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e})),
+    }
+}
+
+/// DELETE /xira/security/waf/rules/{id} — custom rule sil
+pub async fn delete_waf_rule(
+    waf: web::Data<Arc<Waf>>,
+    path: web::Path<u64>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    if waf.remove_custom_pattern(id) {
+        tracing::warn!(audit = "waf_rule_removed", id, "WAF custom rule removed");
+        HttpResponse::Ok().json(serde_json::json!({"removed": id}))
+    } else {
+        HttpResponse::NotFound().json(serde_json::json!({"error": "rule not found"}))
+    }
+}
+
 pub async fn get_waf_stats(waf: web::Data<Arc<Waf>>) -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "waf": { "enabled": waf.is_enabled(), "mode": format!("{:?}", waf.mode()) },
