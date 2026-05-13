@@ -17,10 +17,20 @@ pub struct UptimeService {
 }
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
-pub enum ServiceStatus { Operational, Degraded, PartialOutage, MajorOutage, Maintenance }
+pub enum ServiceStatus {
+    Operational,
+    Degraded,
+    PartialOutage,
+    MajorOutage,
+    Maintenance,
+}
 
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct StatusPoint { pub timestamp: u64, pub status: ServiceStatus, pub response_ms: f64 }
+pub struct StatusPoint {
+    pub timestamp: u64,
+    pub status: ServiceStatus,
+    pub response_ms: f64,
+}
 
 impl Default for UptimePage {
     fn default() -> Self {
@@ -30,43 +40,77 @@ impl Default for UptimePage {
 
 impl UptimePage {
     pub fn new() -> Self {
-        Self { services: DashMap::new(), global_message: String::new() }
+        Self {
+            services: DashMap::new(),
+            global_message: String::new(),
+        }
     }
 
     /// Servis durumunu güncelle
     pub fn update(&self, name: &str, status: ServiceStatus, response_ms: f64) {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        let mut svc = self.services.entry(name.to_string()).or_insert(UptimeService {
-            name: name.to_string(), status: ServiceStatus::Operational,
-            uptime_percent: 100.0, response_time_ms: 0.0, last_check: 0, history: Vec::new(),
-        });
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut svc = self
+            .services
+            .entry(name.to_string())
+            .or_insert(UptimeService {
+                name: name.to_string(),
+                status: ServiceStatus::Operational,
+                uptime_percent: 100.0,
+                response_time_ms: 0.0,
+                last_check: 0,
+                history: Vec::new(),
+            });
 
         svc.status = status.clone();
         svc.response_time_ms = response_ms;
         svc.last_check = now;
-        svc.history.push(StatusPoint { timestamp: now, status, response_ms });
+        svc.history.push(StatusPoint {
+            timestamp: now,
+            status,
+            response_ms,
+        });
         let hist_len = svc.history.len();
-        if hist_len > 90 { svc.history.drain(..hist_len - 90); }
+        if hist_len > 90 {
+            svc.history.drain(..hist_len - 90);
+        }
 
         // Uptime recalc
         let total = svc.history.len();
-        let operational = svc.history.iter().filter(|p| p.status == ServiceStatus::Operational).count();
-        svc.uptime_percent = if total > 0 { (operational as f64 / total as f64) * 100.0 } else { 100.0 };
+        let operational = svc
+            .history
+            .iter()
+            .filter(|p| p.status == ServiceStatus::Operational)
+            .count();
+        svc.uptime_percent = if total > 0 {
+            (operational as f64 / total as f64) * 100.0
+        } else {
+            100.0
+        };
     }
 
     /// Public status page JSON
     pub fn render(&self) -> serde_json::Value {
-        let services: Vec<serde_json::Value> = self.services.iter().map(|e| {
-            serde_json::json!({
-                "name": e.value().name,
-                "status": format!("{:?}", e.value().status),
-                "uptime": format!("{:.2}%", e.value().uptime_percent),
-                "response_ms": e.value().response_time_ms,
-                "last_check": e.value().last_check,
+        let services: Vec<serde_json::Value> = self
+            .services
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.value().name,
+                    "status": format!("{:?}", e.value().status),
+                    "uptime": format!("{:.2}%", e.value().uptime_percent),
+                    "response_ms": e.value().response_time_ms,
+                    "last_check": e.value().last_check,
+                })
             })
-        }).collect();
+            .collect();
 
-        let all_operational = self.services.iter().all(|s| s.value().status == ServiceStatus::Operational);
+        let all_operational = self
+            .services
+            .iter()
+            .all(|s| s.value().status == ServiceStatus::Operational);
 
         serde_json::json!({
             "status": if all_operational { "All Systems Operational" } else { "Issues Detected" },
@@ -76,5 +120,7 @@ impl UptimePage {
         })
     }
 
-    pub fn set_message(&mut self, msg: String) { self.global_message = msg; }
+    pub fn set_message(&mut self, msg: String) {
+        self.global_message = msg;
+    }
 }

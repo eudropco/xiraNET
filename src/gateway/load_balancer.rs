@@ -60,7 +60,8 @@ impl LoadBalancer {
 
         match strategy {
             LoadBalanceStrategy::RoundRobin => {
-                let counter = self.counters
+                let counter = self
+                    .counters
                     .entry(*service_id)
                     .or_insert(AtomicUsize::new(0));
                 let idx = counter.fetch_add(1, Ordering::Relaxed) % upstreams.len();
@@ -75,7 +76,8 @@ impl LoadBalancer {
                 let mut selected = &upstreams[0];
 
                 for upstream in upstreams {
-                    let conn_count = self.connections
+                    let conn_count = self
+                        .connections
                         .get(upstream)
                         .map(|c| c.load(Ordering::Relaxed))
                         .unwrap_or(0);
@@ -103,7 +105,11 @@ impl LoadBalancer {
         if let Some(counter) = self.connections.get(upstream) {
             // Atomic fetch_update: underflow'u önle
             let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
-                if prev > 0 { Some(prev - 1) } else { None }
+                if prev > 0 {
+                    Some(prev - 1)
+                } else {
+                    None
+                }
             });
         }
     }
@@ -111,8 +117,8 @@ impl LoadBalancer {
 
 /// Random index (hash-based, no external crate)
 fn rand_index(max: usize) -> usize {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     std::time::Instant::now().hash(&mut hasher);
     std::thread::current().id().hash(&mut hasher);

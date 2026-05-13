@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{Mutex, Semaphore};
 use std::time::Instant;
+use tokio::sync::{Mutex, Semaphore};
 
 /// Request queue ile backpressure yönetimi
 pub struct RequestQueue {
@@ -52,7 +52,11 @@ impl Drop for QueuePermit {
 
 impl RequestQueue {
     pub fn new(max_concurrent: usize, enabled: bool) -> Self {
-        tracing::info!("Request queue initialized: max_concurrent={}, enabled={}", max_concurrent, enabled);
+        tracing::info!(
+            "Request queue initialized: max_concurrent={}, enabled={}",
+            max_concurrent,
+            enabled
+        );
         Self {
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             max_concurrent,
@@ -91,7 +95,11 @@ impl RequestQueue {
                 stats.rejected += 1;
                 stats.current_depth -= 1;
                 return QueueResult::Rejected {
-                    reason: format!("Queue full: {}/{} (backpressure)", stats.current_depth, self.max_concurrent * 2),
+                    reason: format!(
+                        "Queue full: {}/{} (backpressure)",
+                        stats.current_depth,
+                        self.max_concurrent * 2
+                    ),
                 };
             }
             drop(stats);
@@ -99,7 +107,9 @@ impl RequestQueue {
             match tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 self.semaphore.clone().acquire_owned(),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(permit)) => QueueResult::Acquired(QueuePermit {
                     _permit: permit,
                     enqueued_at: Instant::now(),

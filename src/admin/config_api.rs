@@ -1,5 +1,9 @@
-use actix_web::{web, HttpResponse};
+use crate::alerting::AlertManager;
 use crate::config::XiraConfig;
+use crate::gateway::cache::ResponseCache;
+use crate::gateway::circuit_breaker::CircuitBreakerManager;
+use crate::middleware::rate_limit::RateLimiter;
+use actix_web::{web, HttpResponse};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -13,9 +17,7 @@ pub struct ConfigUpdateRequest {
 }
 
 /// GET /xira/config — Mevcut config'i döndür
-pub async fn get_config(
-    shared_config: web::Data<Arc<RwLock<XiraConfig>>>,
-) -> HttpResponse {
+pub async fn get_config(shared_config: web::Data<Arc<RwLock<XiraConfig>>>) -> HttpResponse {
     let config = shared_config.read().await;
 
     HttpResponse::Ok().json(serde_json::json!({
@@ -76,9 +78,14 @@ pub async fn get_config(
 /// PUT /xira/config — Runtime config güncelle
 pub async fn update_config(
     shared_config: web::Data<Arc<RwLock<XiraConfig>>>,
+    rate_limiter: web::Data<RateLimiter>,
+    cache: web::Data<Arc<ResponseCache>>,
+    circuit_breakers: web::Data<CircuitBreakerManager>,
+    alert_manager: web::Data<AlertManager>,
     body: web::Json<ConfigUpdateRequest>,
 ) -> HttpResponse {
     let mut config = shared_config.write().await;
+    let mut restart_required_fields: Vec<&'static str> = Vec::new();
 
     match body.section.as_str() {
         "rate_limit" => {
@@ -88,8 +95,15 @@ pub async fn update_config(
             if let Some(window) = body.values.get("window_secs").and_then(|v| v.as_u64()) {
                 config.rate_limit.window_secs = window;
             }
-            tracing::info!("Runtime config updated: rate_limit → max={}, window={}s",
-                config.rate_limit.max_requests, config.rate_limit.window_secs);
+            rate_limiter.set_limits(
+                config.rate_limit.max_requests,
+                config.rate_limit.window_secs,
+            );
+            tracing::info!(
+                "Runtime config updated: rate_limit → max={}, window={}s",
+                config.rate_limit.max_requests,
+                config.rate_limit.window_secs
+            );
         }
         "cache" => {
             if let Some(enabled) = body.values.get("enabled").and_then(|v| v.as_bool()) {
@@ -98,18 +112,51 @@ pub async fn update_config(
             if let Some(ttl) = body.values.get("ttl_secs").and_then(|v| v.as_u64()) {
                 config.cache.ttl_secs = ttl;
             }
-            tracing::info!("Runtime config updated: cache → enabled={}, ttl={}s",
-                config.cache.enabled, config.cache.ttl_secs);
+            if let Some(max_entries) = body.values.get("max_entries").and_then(|v| v.as_u64()) {
+                config.cache.max_entries = max_entries as usize;
+                restart_required_fields.push("cache.max_entries");
+            }
+            cache.set_enabled(config.cache.enabled);
+            cache.set_ttl_secs(config.cache.ttl_secs);
+            tracing::info!(
+                "Runtime config updated: cache → enabled={}, ttl={}s",
+                config.cache.enabled,
+                config.cache.ttl_secs
+            );
         }
         "circuit_breaker" => {
-            if let Some(threshold) = body.values.get("failure_threshold").and_then(|v| v.as_u64()) {
+            if let Some(threshold) = body
+                .values
+                .get("failure_threshold")
+                .and_then(|v| v.as_u64())
+            {
                 config.circuit_breaker.failure_threshold = threshold as u32;
             }
-            if let Some(timeout) = body.values.get("reset_timeout_secs").and_then(|v| v.as_u64()) {
+            if let Some(timeout) = body
+                .values
+                .get("reset_timeout_secs")
+                .and_then(|v| v.as_u64())
+            {
                 config.circuit_breaker.reset_timeout_secs = timeout;
             }
-            tracing::info!("Runtime config updated: circuit_breaker → threshold={}, timeout={}s",
-                config.circuit_breaker.failure_threshold, config.circuit_breaker.reset_timeout_secs);
+            if let Some(half_open) = body
+                .values
+                .get("half_open_max_requests")
+                .and_then(|v| v.as_u64())
+            {
+                config.circuit_breaker.half_open_max_requests = half_open as u32;
+            }
+            circuit_breakers.update_config(
+                config.circuit_breaker.failure_threshold,
+                config.circuit_breaker.reset_timeout_secs,
+                config.circuit_breaker.half_open_max_requests,
+            );
+            tracing::info!(
+                "Runtime config updated: circuit_breaker → threshold={}, timeout={}s, half_open={}",
+                config.circuit_breaker.failure_threshold,
+                config.circuit_breaker.reset_timeout_secs,
+                config.circuit_breaker.half_open_max_requests,
+            );
         }
         "retry" => {
             if let Some(max) = body.values.get("max_retries").and_then(|v| v.as_u64()) {
@@ -118,14 +165,49 @@ pub async fn update_config(
             if let Some(delay) = body.values.get("delay_ms").and_then(|v| v.as_u64()) {
                 config.retry.delay_ms = delay;
             }
-            tracing::info!("Runtime config updated: retry → max={}, delay={}ms",
-                config.retry.max_retries, config.retry.delay_ms);
+            if let Some(multiplier) = body
+                .values
+                .get("backoff_multiplier")
+                .and_then(|v| v.as_f64())
+            {
+                config.retry.backoff_multiplier = multiplier;
+            }
+            tracing::info!(
+                "Runtime config updated: retry → max={}, delay={}ms, multiplier={}",
+                config.retry.max_retries,
+                config.retry.delay_ms,
+                config.retry.backoff_multiplier
+            );
         }
         "alerting" => {
             if let Some(enabled) = body.values.get("enabled").and_then(|v| v.as_bool()) {
                 config.alerting.enabled = enabled;
             }
-            tracing::info!("Runtime config updated: alerting → enabled={}", config.alerting.enabled);
+            if let Some(on_down) = body.values.get("on_service_down").and_then(|v| v.as_bool()) {
+                config.alerting.on_service_down = on_down;
+            }
+            if let Some(on_up) = body.values.get("on_service_up").and_then(|v| v.as_bool()) {
+                config.alerting.on_service_up = on_up;
+            }
+            if body.values.get("webhook_url").is_some() {
+                config.alerting.webhook_url = body
+                    .values
+                    .get("webhook_url")
+                    .and_then(|v| v.as_str())
+                    .map(|value| value.to_string());
+            }
+            alert_manager.update_config(
+                config.alerting.webhook_url.clone(),
+                config.alerting.enabled,
+                config.alerting.on_service_down,
+                config.alerting.on_service_up,
+            );
+            tracing::info!(
+                "Runtime config updated: alerting → enabled={}, down={}, up={}",
+                config.alerting.enabled,
+                config.alerting.on_service_down,
+                config.alerting.on_service_up,
+            );
         }
         _ => {
             return HttpResponse::BadRequest().json(serde_json::json!({
@@ -139,6 +221,9 @@ pub async fn update_config(
     HttpResponse::Ok().json(serde_json::json!({
         "status": "updated",
         "section": body.section,
+        "applied_runtime": true,
+        "restart_required": !restart_required_fields.is_empty(),
+        "restart_required_fields": restart_required_fields,
         "message": format!("Config section '{}' updated successfully", body.section),
     }))
 }

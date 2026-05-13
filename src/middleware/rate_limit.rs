@@ -5,21 +5,45 @@ use actix_web::{
 use dashmap::DashMap;
 use std::future::{ready, Future, Ready};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 /// IP bazlı rate limiting (token-bucket)
+#[derive(Clone)]
 pub struct RateLimiter {
-    max_requests: u32,
-    window_secs: u64,
+    config: Arc<RateLimiterConfig>,
+}
+
+struct RateLimiterConfig {
+    max_requests: AtomicU32,
+    window_secs: AtomicU64,
 }
 
 impl RateLimiter {
     pub fn new(max_requests: u32, window_secs: u64) -> Self {
         Self {
-            max_requests,
-            window_secs,
+            config: Arc::new(RateLimiterConfig {
+                max_requests: AtomicU32::new(max_requests.max(1)),
+                window_secs: AtomicU64::new(window_secs.max(1)),
+            }),
         }
+    }
+
+    pub fn set_limits(&self, max_requests: u32, window_secs: u64) {
+        self.config
+            .max_requests
+            .store(max_requests.max(1), Ordering::Relaxed);
+        self.config
+            .window_secs
+            .store(window_secs.max(1), Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> (u32, u64) {
+        (
+            self.config.max_requests.load(Ordering::Relaxed),
+            self.config.window_secs.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -43,8 +67,7 @@ where
         ready(Ok(RateLimiterMiddleware {
             service,
             limits: Arc::new(DashMap::new()),
-            max_requests: self.max_requests,
-            window_secs: self.window_secs,
+            config: self.config.clone(),
         }))
     }
 }
@@ -52,8 +75,7 @@ where
 pub struct RateLimiterMiddleware<S> {
     service: S,
     limits: Arc<DashMap<String, RateLimitEntry>>,
-    max_requests: u32,
-    window_secs: u64,
+    config: Arc<RateLimiterConfig>,
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimiterMiddleware<S>
@@ -74,7 +96,9 @@ where
             .unwrap_or_else(|| "unknown".to_string());
 
         let now = Instant::now();
-        let window_duration = std::time::Duration::from_secs(self.window_secs);
+        let max_requests = self.config.max_requests.load(Ordering::Relaxed).max(1);
+        let window_duration =
+            std::time::Duration::from_secs(self.config.window_secs.load(Ordering::Relaxed).max(1));
 
         let mut entry = self.limits.entry(ip.clone()).or_insert(RateLimitEntry {
             count: 0,
@@ -89,11 +113,11 @@ where
 
         entry.count += 1;
 
-        if entry.count > self.max_requests {
+        if entry.count > max_requests {
             let remaining = window_duration
                 .checked_sub(now.duration_since(entry.window_start))
                 .unwrap_or_default();
-            
+
             drop(entry);
 
             tracing::warn!("Rate limit exceeded for IP: {}", ip);

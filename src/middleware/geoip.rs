@@ -26,10 +26,17 @@ impl GeoIpLookup {
 
     /// IP'den ülke bilgisi çıkar (basit prefix-based lookup)
     pub fn lookup(&self, ip: &str) -> Option<GeoInfo> {
-        if !self.enabled { return None; }
+        if !self.enabled {
+            return None;
+        }
 
         // Private IP ranges → Local
-        if ip.starts_with("127.") || ip.starts_with("10.") || ip.starts_with("192.168.") || ip.starts_with("172.") || ip == "::1" {
+        if ip.starts_with("127.")
+            || ip.starts_with("10.")
+            || ip.starts_with("192.168.")
+            || ip.starts_with("172.")
+            || ip == "::1"
+        {
             return Some(GeoInfo {
                 country_code: "LO".into(),
                 country_name: "Local".into(),
@@ -47,7 +54,9 @@ impl GeoIpLookup {
 
     /// Ülke engeli kontrolü
     pub fn is_blocked(&self, ip: &str) -> bool {
-        if !self.enabled || self.blocked_countries.is_empty() { return false; }
+        if !self.enabled || self.blocked_countries.is_empty() {
+            return false;
+        }
 
         if let Some(info) = self.lookup(ip) {
             return self.blocked_countries.contains(&info.country_code);
@@ -57,11 +66,14 @@ impl GeoIpLookup {
 
     /// Manuel IP-country kayıt (test/override)
     pub fn register(&mut self, ip: String, country_code: String, country_name: String) {
-        self.ip_ranges.insert(ip, GeoInfo {
-            country_code,
-            country_name,
-            continent: "Unknown".into(),
-        });
+        self.ip_ranges.insert(
+            ip,
+            GeoInfo {
+                country_code,
+                country_name,
+                continent: "Unknown".into(),
+            },
+        );
     }
 
     pub fn is_enabled(&self) -> bool {

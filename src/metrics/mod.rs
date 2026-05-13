@@ -1,12 +1,11 @@
+pub mod advanced;
 pub mod sla;
 pub mod trace_collector;
-pub mod advanced;
 
-use actix_web::{HttpResponse, HttpRequest};
+use actix_web::{HttpRequest, HttpResponse};
 use prometheus::{
-    Encoder, TextEncoder,
-    IntCounterVec, HistogramVec, IntGauge,
-    register_int_counter_vec, register_histogram_vec, register_int_gauge,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge, Encoder, HistogramVec,
+    IntCounterVec, IntGauge, TextEncoder,
 };
 
 lazy_static::lazy_static! {

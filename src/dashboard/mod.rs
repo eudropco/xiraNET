@@ -1,13 +1,70 @@
-use actix_web::{HttpResponse, HttpRequest, web};
-use tokio::sync::RwLock;
-use std::sync::Arc;
 use crate::config::XiraConfig;
+use actix_web::{web, HttpRequest, HttpResponse};
+use std::sync::Arc;
+use subtle::ConstantTimeEq;
+use tokio::sync::RwLock;
 
 /// Embedded Web Dashboard v2.1 — Theme toggle + Service detail + Latency + Upstream badges
 pub async fn dashboard_handler(_req: HttpRequest) -> HttpResponse {
     HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-store"))
+        .insert_header(("Referrer-Policy", "no-referrer"))
+        .insert_header(("X-Robots-Tag", "noindex, nofollow"))
         .content_type("text/html; charset=utf-8")
         .body(DASHBOARD_HTML)
+}
+
+/// Admin token'ı yalnızca header'lardan kabul ederiz:
+/// - `X-Api-Key: <key>`
+/// - `Authorization: Bearer <key>`
+///
+/// Query string'den (`?token=...`) kabul etmiyoruz — token access log'lara,
+/// proxy access log'larına, browser history'sine ve Referer header'larına sızar.
+/// WebSocket için header gönderemeyen client'lar `Sec-WebSocket-Protocol` üzerinden
+/// `xira.token.<key>` formatında token gönderebilir.
+fn extract_admin_token(req: &HttpRequest) -> Option<String> {
+    if let Some(v) = req.headers().get("x-api-key").and_then(|v| v.to_str().ok()) {
+        return Some(v.to_string());
+    }
+    if let Some(v) = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+    {
+        return Some(v.to_string());
+    }
+    // WebSocket fallback: Sec-WebSocket-Protocol içinde "xira.token.<key>"
+    if let Some(protocols) = req
+        .headers()
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())
+    {
+        for proto in protocols.split(',').map(|s| s.trim()) {
+            if let Some(tok) = proto.strip_prefix("xira.token.") {
+                return Some(tok.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub(crate) async fn authorize_admin_request(
+    req: &HttpRequest,
+    config: &Arc<RwLock<XiraConfig>>,
+) -> Result<(), HttpResponse> {
+    let expected_token = {
+        let cfg = config.read().await;
+        cfg.admin.api_key.clone()
+    };
+
+    match extract_admin_token(req) {
+        Some(token) if token.as_bytes().ct_eq(expected_token.as_bytes()).into() => Ok(()),
+        _ => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Missing or invalid admin token",
+            "hint": "Use X-Api-Key header or 'Authorization: Bearer <api_key>' (query string ?token= no longer supported — leaks via logs)"
+        }))),
+    }
 }
 
 /// Authenticated WebSocket handler for dashboard live updates
@@ -19,20 +76,8 @@ pub async fn ws_dashboard_handler(
     registry: web::Data<crate::registry::ServiceRegistry>,
     start_time: web::Data<std::time::Instant>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    // Auth check: validate token query param against admin API key
-    let query = req.query_string();
-    let token = query.split('&')
-        .find(|p| p.starts_with("token="))
-        .and_then(|p| p.strip_prefix("token="))
-        .unwrap_or("");
-
-    {
-        let cfg = config.read().await;
-        if token.is_empty() || token != cfg.admin.api_key {
-            return Ok(HttpResponse::Unauthorized().json(
-                serde_json::json!({"error": "Missing or invalid token. Use ?token=<api_key>"})
-            ));
-        }
+    if let Err(response) = authorize_admin_request(&req, config.get_ref()).await {
+        return Ok(response);
     }
 
     let (response, mut session, _msg_stream) = actix_ws::handle(&req, stream)?;
@@ -47,7 +92,10 @@ pub async fn ws_dashboard_handler(
             interval.tick().await;
 
             let services = registry.list_all();
-            let up = services.iter().filter(|s| s.status == crate::registry::models::ServiceStatus::Up).count();
+            let up = services
+                .iter()
+                .filter(|s| s.status == crate::registry::models::ServiceStatus::Up)
+                .count();
             let total_requests: u64 = services.iter().map(|s| s.request_count).sum();
             let uptime = start.elapsed().as_secs();
 
@@ -306,7 +354,9 @@ function api(path,opts={}){
 function connectWS(){
   try{
     const proto=location.protocol==='https:'?'wss:':'ws:';
-    ws=new WebSocket(`${proto}//${location.host}/ws/dashboard?token=${encodeURIComponent(API_KEY)}`);
+    // Token Sec-WebSocket-Protocol üzerinden gider (query string log'lara sızar).
+    const tokenProto='xira.token.'+API_KEY;
+    ws=new WebSocket(`${proto}//${location.host}/ws/dashboard`,[tokenProto]);
     ws.onopen=()=>{document.getElementById('wsBadge').className='ws-badge ws-connected';document.getElementById('wsBadge').textContent='WS: Live'};
     ws.onclose=()=>{document.getElementById('wsBadge').className='ws-badge ws-disconnected';document.getElementById('wsBadge').textContent='WS: Off';setTimeout(connectWS,5000)};
     ws.onmessage=(e)=>{try{const d=JSON.parse(e.data);if(d.type==='stats')updateStats(d.data)}catch(err){}};

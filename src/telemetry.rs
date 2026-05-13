@@ -22,7 +22,8 @@ pub fn init_opentelemetry(
 
     tracing::info!(
         "OpenTelemetry configured: endpoint={}, service={}",
-        endpoint, service_name
+        endpoint,
+        service_name
     );
     tracing::info!(
         "Set OTEL_EXPORTER_OTLP_ENDPOINT={} for trace collection",

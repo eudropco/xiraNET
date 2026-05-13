@@ -1,11 +1,9 @@
-use actix_web::{web, HttpResponse};
 use crate::registry::ServiceRegistry;
+use actix_web::{web, HttpResponse};
 
 /// OpenAPI spec aggregation
 /// GET /xira/docs — birleşik OpenAPI spec
-pub async fn openapi_handler(
-    registry: web::Data<ServiceRegistry>,
-) -> HttpResponse {
+pub async fn openapi_handler(registry: web::Data<ServiceRegistry>) -> HttpResponse {
     let services: Vec<serde_json::Value> = registry
         .list_all()
         .iter()
@@ -161,35 +159,38 @@ fn build_paths(registry: &ServiceRegistry) -> serde_json::Value {
     }
 
     // Admin API paths
-    paths.insert("/xira/services".to_string(), serde_json::json!({
-        "get": {
-            "tags": ["Admin"],
-            "summary": "List all registered services",
-            "security": [{"apiKey": []}],
-            "responses": { "200": { "description": "Service list" } }
-        },
-        "post": {
-            "tags": ["Admin"],
-            "summary": "Register a new service",
-            "security": [{"apiKey": []}],
-            "requestBody": {
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "name": { "type": "string" },
-                                "prefix": { "type": "string" },
-                                "upstream": { "type": "string" },
-                            },
-                            "required": ["name", "prefix", "upstream"]
+    paths.insert(
+        "/xira/services".to_string(),
+        serde_json::json!({
+            "get": {
+                "tags": ["Admin"],
+                "summary": "List all registered services",
+                "security": [{"apiKey": []}],
+                "responses": { "200": { "description": "Service list" } }
+            },
+            "post": {
+                "tags": ["Admin"],
+                "summary": "Register a new service",
+                "security": [{"apiKey": []}],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "prefix": { "type": "string" },
+                                    "upstream": { "type": "string" },
+                                },
+                                "required": ["name", "prefix", "upstream"]
+                            }
                         }
                     }
-                }
-            },
-            "responses": { "201": { "description": "Service registered" } }
-        }
-    }));
+                },
+                "responses": { "201": { "description": "Service registered" } }
+            }
+        }),
+    );
 
     serde_json::Value::Object(paths)
 }

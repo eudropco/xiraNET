@@ -40,14 +40,22 @@ impl AdvancedMetrics {
     }
 
     /// Request kaydı
-    pub fn record(&self, service_name: &str, status: u16, bytes_in: u64, bytes_out: u64, latency_ms: f64) {
+    pub fn record(
+        &self,
+        service_name: &str,
+        status: u16,
+        bytes_in: u64,
+        bytes_out: u64,
+        latency_ms: f64,
+    ) {
         let entry = self.services.entry(service_name.to_string()).or_default();
         let m = entry.value();
 
         m.requests.fetch_add(1, Ordering::Relaxed);
         m.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
         m.bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
-        m.total_latency_ms.fetch_add(latency_ms as u64, Ordering::Relaxed);
+        m.total_latency_ms
+            .fetch_add(latency_ms as u64, Ordering::Relaxed);
 
         match status {
             200..=299 => m.success_2xx.fetch_add(1, Ordering::Relaxed),
@@ -57,8 +65,12 @@ impl AdvancedMetrics {
             _ => 0,
         };
 
-        self.global_bandwidth.total_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
-        self.global_bandwidth.total_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
+        self.global_bandwidth
+            .total_bytes_in
+            .fetch_add(bytes_in, Ordering::Relaxed);
+        self.global_bandwidth
+            .total_bytes_out
+            .fetch_add(bytes_out, Ordering::Relaxed);
     }
 
     /// Servis metrikleri
@@ -90,23 +102,27 @@ impl AdvancedMetrics {
 
     /// Tüm servislerin metrikleri
     pub fn all_services(&self) -> serde_json::Value {
-        let services: Vec<serde_json::Value> = self.services.iter().map(|e| {
-            let name = e.key().clone();
-            let m = e.value();
-            let reqs = m.requests.load(Ordering::Relaxed);
-            let e4 = m.errors_4xx.load(Ordering::Relaxed);
-            let e5 = m.errors_5xx.load(Ordering::Relaxed);
-            serde_json::json!({
-                "service": name,
-                "requests": reqs,
-                "2xx": m.success_2xx.load(Ordering::Relaxed),
-                "3xx": m.redirect_3xx.load(Ordering::Relaxed),
-                "4xx": e4, "5xx": e5,
-                "error_rate": if reqs > 0 { (e4 + e5) as f64 / reqs as f64 } else { 0.0 },
-                "bytes_in": m.bytes_in.load(Ordering::Relaxed),
-                "bytes_out": m.bytes_out.load(Ordering::Relaxed),
+        let services: Vec<serde_json::Value> = self
+            .services
+            .iter()
+            .map(|e| {
+                let name = e.key().clone();
+                let m = e.value();
+                let reqs = m.requests.load(Ordering::Relaxed);
+                let e4 = m.errors_4xx.load(Ordering::Relaxed);
+                let e5 = m.errors_5xx.load(Ordering::Relaxed);
+                serde_json::json!({
+                    "service": name,
+                    "requests": reqs,
+                    "2xx": m.success_2xx.load(Ordering::Relaxed),
+                    "3xx": m.redirect_3xx.load(Ordering::Relaxed),
+                    "4xx": e4, "5xx": e5,
+                    "error_rate": if reqs > 0 { (e4 + e5) as f64 / reqs as f64 } else { 0.0 },
+                    "bytes_in": m.bytes_in.load(Ordering::Relaxed),
+                    "bytes_out": m.bytes_out.load(Ordering::Relaxed),
+                })
             })
-        }).collect();
+            .collect();
 
         serde_json::json!({
             "services": services,
@@ -119,13 +135,23 @@ impl AdvancedMetrics {
 
     /// Error rate threshold alert kontrolü
     pub fn check_error_thresholds(&self, threshold: f64) -> Vec<(String, f64)> {
-        self.services.iter().filter_map(|e| {
-            let m = e.value();
-            let reqs = m.requests.load(Ordering::Relaxed);
-            if reqs == 0 { return None; }
-            let errors = m.errors_4xx.load(Ordering::Relaxed) + m.errors_5xx.load(Ordering::Relaxed);
-            let rate = errors as f64 / reqs as f64;
-            if rate > threshold { Some((e.key().clone(), rate)) } else { None }
-        }).collect()
+        self.services
+            .iter()
+            .filter_map(|e| {
+                let m = e.value();
+                let reqs = m.requests.load(Ordering::Relaxed);
+                if reqs == 0 {
+                    return None;
+                }
+                let errors =
+                    m.errors_4xx.load(Ordering::Relaxed) + m.errors_5xx.load(Ordering::Relaxed);
+                let rate = errors as f64 / reqs as f64;
+                if rate > threshold {
+                    Some((e.key().clone(), rate))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }

@@ -1,10 +1,10 @@
-use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_appender::rolling;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Gelişmiş tracing konfigürasyonu: console + file + OpenTelemetry-ready
 pub fn init_tracing(log_level: &str, file_enabled: bool, file_path: &str, rotation: &str) {
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("{},actix_web=info", log_level)));
+        .unwrap_or_else(|_| EnvFilter::new(format!("{log_level},actix_web=info")));
 
     // Console layer
     let console_layer = fmt::layer()

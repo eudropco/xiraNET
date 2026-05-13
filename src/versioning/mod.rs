@@ -1,5 +1,5 @@
-use actix_web::{web, HttpRequest, HttpResponse};
 use crate::registry::ServiceRegistry;
+use actix_web::{web, HttpRequest, HttpResponse};
 
 /// API versioning handler
 /// /v1/api/... → /api/... (servisin v1 versiyonu)
@@ -39,24 +39,29 @@ pub async fn versioned_gateway_handler(
     match matching_service {
         Some(service) => {
             let downstream_path = actual_path.strip_prefix(&service.prefix).unwrap_or("/");
-            let downstream_path = if downstream_path.is_empty() { "/" } else { downstream_path };
+            let downstream_path = if downstream_path.is_empty() {
+                "/"
+            } else {
+                downstream_path
+            };
             let downstream_url = format!("{}{}", service.upstream, downstream_path);
 
             tracing::info!(
                 "Versioned proxy: {} {} (v{}) → {}",
-                req.method(), path, version_str, downstream_url
+                req.method(),
+                path,
+                version_str,
+                downstream_url
             );
 
             registry.increment_request_count(&service.id);
             crate::gateway::proxy::forward_request(&req, body, &downstream_url).await
         }
-        None => {
-            HttpResponse::NotFound().json(serde_json::json!({
-                "error": "No service found for this version and path",
-                "version": version_str,
-                "path": actual_path
-            }))
-        }
+        None => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "No service found for this version and path",
+            "version": version_str,
+            "path": actual_path
+        })),
     }
 }
 
@@ -88,12 +93,14 @@ pub async fn list_versions(registry: web::Data<ServiceRegistry>) -> HttpResponse
     let versions: Vec<serde_json::Value> = services
         .iter()
         .filter(|s| s.version.is_some())
-        .map(|s| serde_json::json!({
-            "service": s.name,
-            "prefix": s.prefix,
-            "version": s.version,
-            "upstream": s.upstream,
-        }))
+        .map(|s| {
+            serde_json::json!({
+                "service": s.name,
+                "prefix": s.prefix,
+                "version": s.version,
+                "upstream": s.upstream,
+            })
+        })
         .collect();
 
     HttpResponse::Ok().json(serde_json::json!({

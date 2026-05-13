@@ -20,8 +20,18 @@ impl Default for CorsPolicy {
     fn default() -> Self {
         Self {
             allowed_origins: vec!["*".to_string()],
-            allowed_methods: vec!["GET".into(), "POST".into(), "PUT".into(), "DELETE".into(), "OPTIONS".into()],
-            allowed_headers: vec!["Content-Type".into(), "Authorization".into(), "X-Api-Key".into()],
+            allowed_methods: vec![
+                "GET".into(),
+                "POST".into(),
+                "PUT".into(),
+                "DELETE".into(),
+                "OPTIONS".into(),
+            ],
+            allowed_headers: vec![
+                "Content-Type".into(),
+                "Authorization".into(),
+                "X-Api-Key".into(),
+            ],
             expose_headers: vec!["X-Request-Id".into(), "X-Response-Time".into()],
             max_age: 86400,
             allow_credentials: false,
@@ -74,9 +84,18 @@ impl CorsManager {
         };
 
         headers.push(("Access-Control-Allow-Origin".into(), allow_origin));
-        headers.push(("Access-Control-Allow-Methods".into(), policy.allowed_methods.join(", ")));
-        headers.push(("Access-Control-Allow-Headers".into(), policy.allowed_headers.join(", ")));
-        headers.push(("Access-Control-Expose-Headers".into(), policy.expose_headers.join(", ")));
+        headers.push((
+            "Access-Control-Allow-Methods".into(),
+            policy.allowed_methods.join(", "),
+        ));
+        headers.push((
+            "Access-Control-Allow-Headers".into(),
+            policy.allowed_headers.join(", "),
+        ));
+        headers.push((
+            "Access-Control-Expose-Headers".into(),
+            policy.expose_headers.join(", "),
+        ));
         headers.push(("Access-Control-Max-Age".into(), policy.max_age.to_string()));
 
         if policy.allow_credentials {
@@ -87,6 +106,9 @@ impl CorsManager {
     }
 
     pub fn list_policies(&self) -> Vec<(String, CorsPolicy)> {
-        self.policies.iter().map(|e| (e.key().clone(), e.value().clone())).collect()
+        self.policies
+            .iter()
+            .map(|e| (e.key().clone(), e.value().clone()))
+            .collect()
     }
 }

@@ -5,13 +5,44 @@ use tokio::net::TcpListener;
 
 use crate::registry::ServiceRegistry;
 
+/// gRPC için paylaşılan client. http2_prior_knowledge + connection pool.
+/// Her isteğe `Client::new()` yapmak HTTP/2'siz default'a düşürdüğü için
+/// gRPC kırılır ve socket exhaustion'a yol açar.
+fn grpc_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .pool_max_idle_per_host(20)
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("gRPC client init must succeed")
+    })
+}
+
+/// HTTP/1 hop-by-hop header'ları (RFC 7230). Bunlar end-to-end değildir
+/// ve forward edilirse request smuggling / TE-CL desync'e yol açabilir.
+fn is_hop_by_hop(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host" // Host'u upstream URL'den biz set ederiz
+            | "content-length" // reqwest yeniden hesaplar
+    )
+}
+
 /// gRPC transparent proxy server
-pub async fn start_grpc_proxy(
-    registry: Arc<ServiceRegistry>,
-    host: String,
-    port: u16,
-) {
-    let addr = format!("{}:{}", host, port);
+pub async fn start_grpc_proxy(registry: Arc<ServiceRegistry>, host: String, port: u16) {
+    let addr = format!("{host}:{port}");
 
     let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
@@ -38,17 +69,14 @@ pub async fn start_grpc_proxy(
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
                 let registry = registry.clone();
-                async move {
-                    handle_grpc_request(req, &registry, &peer.to_string()).await
-                }
+                async move { handle_grpc_request(req, &registry, &peer.to_string()).await }
             });
 
-            if let Err(e) = hyper_util::server::conn::auto::Builder::new(
-                hyper_util::rt::TokioExecutor::new()
-            )
-            .http2_only()
-            .serve_connection(io, service)
-            .await
+            if let Err(e) =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                    .http2_only()
+                    .serve_connection(io, service)
+                    .await
             {
                 tracing::debug!("gRPC connection ended: {}", e);
             }
@@ -64,7 +92,6 @@ async fn handle_grpc_request(
     let path = req.uri().path().to_string();
 
     // gRPC path format: /package.ServiceName/MethodName
-    // İlk segment'i service prefix olarak kullan
     let service = registry.lookup(&path);
 
     match service {
@@ -74,27 +101,22 @@ async fn handle_grpc_request(
 
             tracing::info!("gRPC proxy: {} → {}", path, downstream_url);
 
-            // Forward gRPC request via reqwest (HTTP/2)
-            let client = reqwest::Client::builder()
-                .http2_prior_knowledge()
-                .build()
-                .unwrap_or_default();
+            let client = grpc_client();
 
-            let method = match req.method().as_str() {
-                "POST" => reqwest::Method::POST,
-                _ => reqwest::Method::POST, // gRPC is always POST
-            };
+            // gRPC her zaman POST'tur
+            let mut forwarded = client.request(reqwest::Method::POST, &downstream_url);
 
-            let mut forwarded = client.request(method, &downstream_url);
-
-            // Forward headers
+            // Header'ları forward et — hop-by-hop'ları filtrele
             for (key, value) in req.headers().iter() {
+                if is_hop_by_hop(key.as_str()) {
+                    continue;
+                }
                 if let Ok(val_str) = value.to_str() {
                     forwarded = forwarded.header(key.as_str(), val_str);
                 }
             }
 
-            // Forward body
+            // Body
             let body_bytes = match http_body_util::BodyExt::collect(req.into_body()).await {
                 Ok(collected) => collected.to_bytes(),
                 Err(_) => bytes::Bytes::new(),
@@ -110,13 +132,23 @@ async fn handle_grpc_request(
                     let mut response = hyper::Response::builder().status(status);
 
                     for (key, value) in resp.headers().iter() {
+                        if is_hop_by_hop(key.as_str()) {
+                            continue;
+                        }
                         if let Ok(val_str) = value.to_str() {
                             response = response.header(key.as_str(), val_str);
                         }
                     }
 
-                    let resp_body = resp.bytes().await.unwrap_or_default();
-                    Ok(response.body(http_body_util::Full::new(resp_body)).unwrap())
+                    match resp.bytes().await {
+                        Ok(resp_body) => Ok(response
+                            .body(http_body_util::Full::new(resp_body))
+                            .unwrap_or_else(|_| internal_grpc_error())),
+                        Err(e) => {
+                            tracing::warn!("gRPC body read error: {}", e);
+                            Ok(internal_grpc_error())
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("gRPC proxy error: {}", e);
@@ -124,7 +156,7 @@ async fn handle_grpc_request(
                         .status(hyper::StatusCode::BAD_GATEWAY)
                         .header("content-type", "application/grpc")
                         .header("grpc-status", "14") // UNAVAILABLE
-                        .header("grpc-message", format!("upstream error: {}", e))
+                        .header("grpc-message", "upstream unavailable")
                         .body(http_body_util::Full::new(bytes::Bytes::new()))
                         .unwrap();
                     Ok(response)
@@ -136,10 +168,20 @@ async fn handle_grpc_request(
                 .status(hyper::StatusCode::NOT_FOUND)
                 .header("content-type", "application/grpc")
                 .header("grpc-status", "12") // UNIMPLEMENTED
-                .header("grpc-message", format!("no service for path: {}", path))
+                .header("grpc-message", "no service registered for path")
                 .body(http_body_util::Full::new(bytes::Bytes::new()))
                 .unwrap();
             Ok(response)
         }
     }
+}
+
+fn internal_grpc_error() -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
+    hyper::Response::builder()
+        .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+        .header("content-type", "application/grpc")
+        .header("grpc-status", "13") // INTERNAL
+        .header("grpc-message", "proxy internal error")
+        .body(http_body_util::Full::new(bytes::Bytes::new()))
+        .unwrap()
 }

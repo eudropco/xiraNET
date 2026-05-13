@@ -1,5 +1,5 @@
-use actix_web::{web, HttpRequest, HttpResponse};
 use crate::registry::ServiceRegistry;
+use actix_web::{web, HttpRequest, HttpResponse};
 
 /// JSON Schema validation middleware (endpoint handler olarak)
 pub async fn validate_request_body(
@@ -46,7 +46,11 @@ pub async fn validate_request_body(
     let schema_value: serde_json::Value = match serde_json::from_str(schema_str) {
         Ok(v) => v,
         Err(e) => {
-            tracing::error!("Invalid validation schema for service '{}': {}", service.name, e);
+            tracing::error!(
+                "Invalid validation schema for service '{}': {}",
+                service.name,
+                e
+            );
             return None;
         }
     };

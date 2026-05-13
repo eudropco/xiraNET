@@ -12,11 +12,7 @@ pub struct DistributedRateLimiter {
 
 impl DistributedRateLimiter {
     /// Yeni Redis rate limiter oluştur
-    pub async fn new(
-        redis_url: Option<&str>,
-        max_requests: u32,
-        window_secs: u64,
-    ) -> Self {
+    pub async fn new(redis_url: Option<&str>, max_requests: u32, window_secs: u64) -> Self {
         let client = if let Some(url) = redis_url {
             match redis::Client::open(url) {
                 Ok(client) => match redis::aio::ConnectionManager::new(client).await {
@@ -53,7 +49,7 @@ impl DistributedRateLimiter {
             _ => return Ok((true, 0)), // Redis yoksa izin ver
         };
 
-        let key = format!("xiranet:rl:{}", ip);
+        let key = format!("xiranet:rl:{ip}");
         let mut conn = (**client).clone();
 
         // MULTI: INCR + EXPIRE (atomic)
@@ -74,20 +70,30 @@ impl DistributedRateLimiter {
         let allowed = count <= self.max_requests;
 
         if !allowed {
-            tracing::debug!("Redis rate limit exceeded for {}: {}/{}", ip, count, self.max_requests);
+            tracing::debug!(
+                "Redis rate limit exceeded for {}: {}/{}",
+                ip,
+                count,
+                self.max_requests
+            );
         }
 
         Ok((allowed, remaining))
     }
 
     /// Service-specific rate limit
-    pub async fn check_service_rate_limit(&self, ip: &str, service_id: &str, max: u32) -> Result<bool, ()> {
+    pub async fn check_service_rate_limit(
+        &self,
+        ip: &str,
+        service_id: &str,
+        max: u32,
+    ) -> Result<bool, ()> {
         let client = match &self.client {
             Some(c) if self.enabled => c,
             _ => return Ok(true),
         };
 
-        let key = format!("xiranet:rl:{}:{}", service_id, ip);
+        let key = format!("xiranet:rl:{service_id}:{ip}");
         let mut conn = (**client).clone();
 
         let count: u32 = conn.incr(&key, 1).await.unwrap_or(0);

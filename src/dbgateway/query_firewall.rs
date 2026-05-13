@@ -27,6 +27,7 @@ pub struct QueryStats {
     pub writes: u64,
 }
 
+#[derive(Debug)]
 pub enum QueryVerdict {
     Allow { is_read: bool },
     Block { reason: String },
@@ -81,13 +82,20 @@ impl QueryFirewall {
     /// Slow query kaydet
     pub async fn record_slow(&self, query: &str, duration_ms: f64, source: &str) {
         if duration_ms > self.slow_threshold_ms {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let mut log = self.slow_log.write().await;
             log.push(SlowQuery {
                 query_preview: query[..query.len().min(200)].to_string(),
-                duration_ms, source: source.to_string(), timestamp: now,
+                duration_ms,
+                source: source.to_string(),
+                timestamp: now,
             });
-            if log.len() > 500 { log.drain(..250); }
+            if log.len() > 500 {
+                log.drain(..250);
+            }
 
             let mut stats = self.stats.write().await;
             stats.slow_queries += 1;
@@ -98,7 +106,11 @@ impl QueryFirewall {
     pub async fn record_query(&self, is_read: bool) {
         let mut stats = self.stats.write().await;
         stats.total_queries += 1;
-        if is_read { stats.reads += 1; } else { stats.writes += 1; }
+        if is_read {
+            stats.reads += 1;
+        } else {
+            stats.writes += 1;
+        }
     }
 
     /// Slow query log
@@ -122,13 +134,20 @@ pub struct ReadWriteSplitter {
 
 impl ReadWriteSplitter {
     pub fn new(primary: String, replicas: Vec<String>) -> Self {
-        Self { primary, replicas, current_replica: std::sync::atomic::AtomicUsize::new(0) }
+        Self {
+            primary,
+            replicas,
+            current_replica: std::sync::atomic::AtomicUsize::new(0),
+        }
     }
 
     /// Sorguya göre target seç
     pub fn route(&self, is_read: bool) -> &str {
         if is_read && !self.replicas.is_empty() {
-            let idx = self.current_replica.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.replicas.len();
+            let idx = self
+                .current_replica
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                % self.replicas.len();
             &self.replicas[idx]
         } else {
             &self.primary

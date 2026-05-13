@@ -31,7 +31,13 @@ impl TenantManager {
     }
 
     /// Tenant oluştur
-    pub fn create_tenant(&self, id: String, name: String, rate_limit: u32, quota_daily: Option<u64>) -> TenantConfig {
+    pub fn create_tenant(
+        &self,
+        id: String,
+        name: String,
+        rate_limit: u32,
+        quota_daily: Option<u64>,
+    ) -> TenantConfig {
         let config = TenantConfig {
             id: id.clone(),
             name,
@@ -48,7 +54,11 @@ impl TenantManager {
     }
 
     /// Request'den tenant'ı belirle
-    pub fn identify_tenant(&self, headers: &actix_web::http::header::HeaderMap, host: &str) -> Option<TenantConfig> {
+    pub fn identify_tenant(
+        &self,
+        headers: &actix_web::http::header::HeaderMap,
+        host: &str,
+    ) -> Option<TenantConfig> {
         if !self.enabled {
             return None;
         }

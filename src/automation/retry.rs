@@ -44,9 +44,11 @@ impl RetryManager {
             let result = match method.to_uppercase().as_str() {
                 "POST" => {
                     let mut req = client.post(url);
-                    if let Some(b) = body { req = req.body(b.to_string()); }
+                    if let Some(b) = body {
+                        req = req.body(b.to_string());
+                    }
                     req.send().await
-                },
+                }
                 "PUT" => client.put(url).send().await,
                 "DELETE" => client.delete(url).send().await,
                 _ => client.get(url).send().await,
@@ -60,22 +62,39 @@ impl RetryManager {
                     let status = resp.status().as_u16();
                     if policy.retry_on_status.contains(&status) && attempt < policy.max_attempts {
                         let delay = calculate_delay(attempt, policy);
-                        tracing::warn!("Retry {}/{}: HTTP {} (waiting {}ms)", attempt, policy.max_attempts, status, delay);
+                        tracing::warn!(
+                            "Retry {}/{}: HTTP {} (waiting {}ms)",
+                            attempt,
+                            policy.max_attempts,
+                            status,
+                            delay
+                        );
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                         continue;
                     }
                     return Ok(RetryResult {
-                        status, attempts: attempt, total_duration_ms: total_duration,
+                        status,
+                        attempts: attempt,
+                        total_duration_ms: total_duration,
                         success: resp.status().is_success(),
                     });
                 }
                 Err(e) => {
                     last_error = e.to_string();
                     if attempt >= policy.max_attempts {
-                        return Err(format!("All {} attempts failed. Last: {}", policy.max_attempts, last_error));
+                        return Err(format!(
+                            "All {} attempts failed. Last: {}",
+                            policy.max_attempts, last_error
+                        ));
                     }
                     let delay = calculate_delay(attempt, policy);
-                    tracing::warn!("Retry {}/{}: {} (waiting {}ms)", attempt, policy.max_attempts, last_error, delay);
+                    tracing::warn!(
+                        "Retry {}/{}: {} (waiting {}ms)",
+                        attempt,
+                        policy.max_attempts,
+                        last_error,
+                        delay
+                    );
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                 }
             }
@@ -92,6 +111,7 @@ pub struct RetryResult {
 }
 
 fn calculate_delay(attempt: u32, policy: &RetryPolicy) -> u64 {
-    let delay = (policy.initial_delay_ms as f64 * policy.backoff_multiplier.powi(attempt as i32 - 1)) as u64;
+    let delay = (policy.initial_delay_ms as f64
+        * policy.backoff_multiplier.powi(attempt as i32 - 1)) as u64;
     delay.min(policy.max_delay_ms)
 }

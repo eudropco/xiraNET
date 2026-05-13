@@ -1,6 +1,6 @@
+use crate::registry::ServiceRegistry;
 /// GraphQL Gateway — schema proxy + request routing
 use actix_web::{web, HttpRequest, HttpResponse};
-use crate::registry::ServiceRegistry;
 
 /// GraphQL proxy handler
 /// POST /graphql → route to appropriate upstream based on query analysis
@@ -21,7 +21,10 @@ pub async fn graphql_handler(
         }
     };
 
-    let query = gql_request.get("query").and_then(|q| q.as_str()).unwrap_or("");
+    let query = gql_request
+        .get("query")
+        .and_then(|q| q.as_str())
+        .unwrap_or("");
     let _operation_name = gql_request.get("operationName").and_then(|o| o.as_str());
     let _variables = gql_request.get("variables");
 
@@ -35,7 +38,8 @@ pub async fn graphql_handler(
             let client = reqwest::Client::new();
             let upstream_url = format!("{}/graphql", service.upstream);
 
-            match client.post(&upstream_url)
+            match client
+                .post(&upstream_url)
                 .header("Content-Type", "application/json")
                 .body(body.to_vec())
                 .send()
@@ -44,12 +48,12 @@ pub async fn graphql_handler(
                 Ok(resp) => {
                     let status = resp.status();
                     match resp.bytes().await {
-                        Ok(body) => {
-                            HttpResponse::build(actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap())
-                                .content_type("application/json")
-                                .insert_header(("X-Proxied-By", "XIRA-GraphQL"))
-                                .body(body)
-                        }
+                        Ok(body) => HttpResponse::build(
+                            actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap(),
+                        )
+                        .content_type("application/json")
+                        .insert_header(("X-Proxied-By", "XIRA-GraphQL"))
+                        .body(body),
                         Err(e) => HttpResponse::BadGateway().json(serde_json::json!({
                             "errors": [{"message": format!("Upstream read error: {}", e)}]
                         })),

@@ -14,8 +14,8 @@ pub fn create_tls_config(
     // Sunucu sertifikası yükle
     let cert_file = File::open(cert_path)?;
     let mut cert_reader = BufReader::new(cert_file);
-    let cert_chain: Vec<rustls::pki_types::CertificateDer> = certs(&mut cert_reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let cert_chain: Vec<rustls::pki_types::CertificateDer> =
+        certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
 
     if cert_chain.is_empty() {
         return Err("No certificates found in cert file".into());
@@ -28,7 +28,9 @@ pub fn create_tls_config(
         .map(|k| k.map(rustls::pki_types::PrivateKeyDer::from))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let key = keys.into_iter().next()
+    let key = keys
+        .into_iter()
+        .next()
         .ok_or("No private key found in key file")?;
 
     let config = if mtls_enabled {
@@ -36,8 +38,8 @@ pub fn create_tls_config(
         if let Some(ca_path) = client_ca_path {
             let ca_file = File::open(ca_path)?;
             let mut ca_reader = BufReader::new(ca_file);
-            let ca_certs: Vec<rustls::pki_types::CertificateDer> = certs(&mut ca_reader)
-                .collect::<Result<Vec<_>, _>>()?;
+            let ca_certs: Vec<rustls::pki_types::CertificateDer> =
+                certs(&mut ca_reader).collect::<Result<Vec<_>, _>>()?;
 
             let mut root_store = rustls::RootCertStore::empty();
             for cert in ca_certs {
@@ -46,12 +48,12 @@ pub fn create_tls_config(
 
             let client_auth = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
                 .build()
-                .map_err(|e| format!("Failed to create client verifier: {}", e))?;
+                .map_err(|e| format!("Failed to create client verifier: {e}"))?;
 
             ServerConfig::builder()
                 .with_client_cert_verifier(client_auth)
                 .with_single_cert(cert_chain, key)
-                .map_err(|e| format!("TLS config error: {}", e))?
+                .map_err(|e| format!("TLS config error: {e}"))?
         } else {
             return Err("mTLS enabled but no client CA path provided".into());
         }
@@ -60,14 +62,10 @@ pub fn create_tls_config(
         ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(cert_chain, key)
-            .map_err(|e| format!("TLS config error: {}", e))?
+            .map_err(|e| format!("TLS config error: {e}"))?
     };
 
-    tracing::info!(
-        "TLS configured: cert={}, mtls={}",
-        cert_path,
-        mtls_enabled
-    );
+    tracing::info!("TLS configured: cert={}, mtls={}", cert_path, mtls_enabled);
 
     Ok(config)
 }

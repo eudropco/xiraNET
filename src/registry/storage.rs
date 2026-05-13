@@ -1,6 +1,15 @@
-use rusqlite::{Connection, params};
-use std::sync::Mutex;
 use crate::registry::models::ServiceEntry;
+use rusqlite::{params, Connection};
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+fn parse_string_vec(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
+fn parse_transform(raw: Option<String>) -> Option<crate::config::TransformConfig> {
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+}
 
 /// SQLite-based persistent storage for services
 pub struct SqliteStorage {
@@ -16,11 +25,13 @@ impl SqliteStorage {
 
         let conn = Connection::open(db_path)?;
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA foreign_keys=ON;
-        ")?;
+        ",
+        )?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS services (
@@ -33,11 +44,16 @@ impl SqliteStorage {
                 load_balance TEXT,
                 version TEXT,
                 validation_schema TEXT,
+                ip_whitelist TEXT DEFAULT '[]',
+                ip_blacklist TEXT DEFAULT '[]',
+                transform TEXT,
                 registered_at TEXT NOT NULL,
                 request_count INTEGER DEFAULT 0
             )",
             [],
         )?;
+
+        Self::migrate_services_table(&conn)?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS request_logs (
@@ -77,17 +93,75 @@ impl SqliteStorage {
         )?;
 
         tracing::info!("SQLite storage initialized: {}", db_path);
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn migrate_services_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+        let existing_columns = {
+            let mut stmt = conn.prepare("PRAGMA table_info(services)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let mut columns = HashSet::new();
+
+            for column in rows.flatten() {
+                columns.insert(column);
+            }
+
+            columns
+        };
+
+        Self::add_services_column_if_missing(
+            conn,
+            &existing_columns,
+            "ip_whitelist",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        Self::add_services_column_if_missing(
+            conn,
+            &existing_columns,
+            "ip_blacklist",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        Self::add_services_column_if_missing(conn, &existing_columns, "transform", "TEXT")?;
+
+        Ok(())
+    }
+
+    fn add_services_column_if_missing(
+        conn: &Connection,
+        existing_columns: &HashSet<String>,
+        column_name: &str,
+        definition: &str,
+    ) -> Result<(), rusqlite::Error> {
+        if existing_columns.contains(column_name) {
+            return Ok(());
+        }
+
+        let sql = format!(
+            "ALTER TABLE services ADD COLUMN {column_name} {definition}"
+        );
+        conn.execute(&sql, [])?;
+        tracing::info!("SQLite migration applied: services.{}", column_name);
+        Ok(())
     }
 
     /// Servis kaydet
     pub fn save_service(&self, entry: &ServiceEntry) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         let upstreams_json = serde_json::to_string(&entry.upstreams).unwrap_or_default();
+        let ip_whitelist_json =
+            serde_json::to_string(&entry.ip_whitelist).unwrap_or_else(|_| "[]".to_string());
+        let ip_blacklist_json =
+            serde_json::to_string(&entry.ip_blacklist).unwrap_or_else(|_| "[]".to_string());
+        let transform_json = entry
+            .transform
+            .as_ref()
+            .and_then(|transform| serde_json::to_string(transform).ok());
 
         conn.execute(
-            "INSERT OR REPLACE INTO services (id, name, prefix, upstream, health_endpoint, upstreams, load_balance, version, validation_schema, registered_at, request_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO services (id, name, prefix, upstream, health_endpoint, upstreams, load_balance, version, validation_schema, ip_whitelist, ip_blacklist, transform, registered_at, request_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 entry.id.to_string(),
                 entry.name,
@@ -98,6 +172,9 @@ impl SqliteStorage {
                 entry.load_balance,
                 entry.version,
                 entry.validation_schema,
+                ip_whitelist_json,
+                ip_blacklist_json,
+                transform_json,
                 entry.registered_at.to_rfc3339(),
                 entry.request_count as i64,
             ],
@@ -107,16 +184,19 @@ impl SqliteStorage {
 
     /// Tüm servisleri yükle
     pub fn load_all_services(&self) -> Result<Vec<ServiceEntry>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         let mut stmt = conn.prepare(
-            "SELECT id, name, prefix, upstream, health_endpoint, upstreams, load_balance, version, validation_schema, registered_at, request_count FROM services"
+            "SELECT id, name, prefix, upstream, health_endpoint, upstreams, load_balance, version, validation_schema, ip_whitelist, ip_blacklist, transform, registered_at, request_count FROM services"
         )?;
 
         let entries = stmt.query_map([], |row| {
             let id_str: String = row.get(0)?;
             let upstreams_str: String = row.get(5)?;
-            let registered_str: String = row.get(9)?;
-            let request_count: i64 = row.get(10)?;
+            let ip_whitelist_str: String = row.get(9)?;
+            let ip_blacklist_str: String = row.get(10)?;
+            let transform_str: Option<String> = row.get(11)?;
+            let registered_str: String = row.get(12)?;
+            let request_count: i64 = row.get(13)?;
 
             Ok(ServiceEntry {
                 id: uuid::Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -134,9 +214,9 @@ impl SqliteStorage {
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 last_health_check: None,
                 request_count: request_count as u64,
-                ip_whitelist: vec![],
-                ip_blacklist: vec![],
-                transform: None,
+                ip_whitelist: parse_string_vec(&ip_whitelist_str),
+                ip_blacklist: parse_string_vec(&ip_blacklist_str),
+                transform: parse_transform(transform_str),
             })
         })?;
 
@@ -149,7 +229,7 @@ impl SqliteStorage {
 
     /// Servis kaldır
     pub fn remove_service(&self, id: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         conn.execute("DELETE FROM services WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -164,7 +244,7 @@ impl SqliteStorage {
         duration_ms: u64,
         peer_ip: &str,
     ) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         conn.execute(
             "INSERT INTO request_logs (service_id, method, path, status, duration_ms, peer_ip, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -182,19 +262,31 @@ impl SqliteStorage {
     }
 
     /// Event kaydet
-    pub fn log_event(&self, event_type: &str, service_id: Option<&str>, service_name: Option<&str>, message: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+    pub fn log_event(
+        &self,
+        event_type: &str,
+        service_id: Option<&str>,
+        service_name: Option<&str>,
+        message: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         conn.execute(
             "INSERT INTO events (event_type, service_id, service_name, message, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![event_type, service_id, service_name, message, chrono::Utc::now().to_rfc3339()],
+            params![
+                event_type,
+                service_id,
+                service_name,
+                message,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )?;
         Ok(())
     }
 
     /// İstek sayacını güncelle
     pub fn update_request_count(&self, id: &str, count: u64) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         conn.execute(
             "UPDATE services SET request_count = ?1 WHERE id = ?2",
             params![count as i64, id],
@@ -204,10 +296,10 @@ impl SqliteStorage {
 
     /// Son N request log'u getir
     pub fn get_recent_logs(&self, limit: usize) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         let mut stmt = conn.prepare(
             "SELECT service_id, method, path, status, duration_ms, peer_ip, timestamp
-             FROM request_logs ORDER BY id DESC LIMIT ?1"
+             FROM request_logs ORDER BY id DESC LIMIT ?1",
         )?;
 
         let logs = stmt.query_map(params![limit as i64], |row| {
@@ -230,11 +322,14 @@ impl SqliteStorage {
     }
 
     /// Son N event'i getir
-    pub fn get_recent_events(&self, limit: usize) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+    pub fn get_recent_events(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
         let mut stmt = conn.prepare(
             "SELECT event_type, service_id, service_name, message, timestamp
-             FROM events ORDER BY id DESC LIMIT ?1"
+             FROM events ORDER BY id DESC LIMIT ?1",
         )?;
 
         let events = stmt.query_map(params![limit as i64], |row| {
@@ -256,18 +351,26 @@ impl SqliteStorage {
 
     /// İstatistik al
     pub fn get_stats(&self) -> Result<serde_json::Value, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
-        let total_requests: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM request_logs", [], |row| row.get(0)
-        ).unwrap_or(0);
+        let conn = match self.conn.lock() { Ok(c) => c, Err(p) => p.into_inner() };
+        let total_requests: i64 = conn
+            .query_row("SELECT COUNT(*) FROM request_logs", [], |row| row.get(0))
+            .unwrap_or(0);
 
-        let avg_duration: f64 = conn.query_row(
-            "SELECT COALESCE(AVG(duration_ms), 0) FROM request_logs", [], |row| row.get(0)
-        ).unwrap_or(0.0);
+        let avg_duration: f64 = conn
+            .query_row(
+                "SELECT COALESCE(AVG(duration_ms), 0) FROM request_logs",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0.0);
 
-        let error_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM request_logs WHERE status >= 500", [], |row| row.get(0)
-        ).unwrap_or(0);
+        let error_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM request_logs WHERE status >= 500",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         Ok(serde_json::json!({
             "total_requests_logged": total_requests,
@@ -276,21 +379,38 @@ impl SqliteStorage {
         }))
     }
 
-    /// Raw SQL çalıştır (CREATE TABLE, etc — no params)
+    /// Raw SQL çalıştır (CREATE TABLE, etc — no params).
+    /// SAFETY: Yalnızca SABİT/literal SQL için kullanın (migration, DDL, schema).
+    /// User input geçmek SQL injection'a yol açar — `execute_params`'i tercih edin.
     pub fn execute_raw(&self, sql: &str) -> Result<usize, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
         conn.execute_batch(sql).map(|_| 0)
     }
 
     /// Parameterized SQL execute (INSERT, UPDATE, DELETE — safe from injection)
-    pub fn execute_params(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<usize, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+    pub fn execute_params(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<usize, rusqlite::Error> {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
         conn.execute(sql, params)
     }
 
-    /// Raw SQL sorgusu çalıştır (SELECT) — Vec<serde_json::Value> döndürür
+    /// Raw SQL sorgusu çalıştır (SELECT) — Vec<serde_json::Value> döndürür.
+    /// SAFETY: Yalnızca SABİT/literal SQL için kullanın. User input geçmek SQL
+    /// injection'a yol açar — `query_params`'i tercih edin.
     pub fn query_raw(&self, sql: &str) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
         let mut stmt = conn.prepare(sql)?;
         let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
 
@@ -299,9 +419,53 @@ impl SqliteStorage {
             for (i, col) in columns.iter().enumerate() {
                 let val: rusqlite::Result<String> = row.get(i);
                 match val {
-                    Ok(s) => { obj.insert(col.clone(), serde_json::Value::String(s)); },
+                    Ok(s) => {
+                        obj.insert(col.clone(), serde_json::Value::String(s));
+                    }
                     Err(_) => {
                         // Try as integer
+                        if let Ok(n) = row.get::<_, i64>(i) {
+                            obj.insert(col.clone(), serde_json::json!(n));
+                        } else if let Ok(f) = row.get::<_, f64>(i) {
+                            obj.insert(col.clone(), serde_json::json!(f));
+                        } else {
+                            obj.insert(col.clone(), serde_json::Value::Null);
+                        }
+                    }
+                }
+            }
+            Ok(serde_json::Value::Object(obj))
+        })?;
+
+        let mut result = Vec::new();
+        for v in rows.flatten() {
+            result.push(v);
+        }
+        Ok(result)
+    }
+
+    /// Parameterized SELECT — user input içeren sorgular için tercih edilir.
+    pub fn query_params(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+
+        let rows = stmt.query_map(params, |row| {
+            let mut obj = serde_json::Map::new();
+            for (i, col) in columns.iter().enumerate() {
+                let val: rusqlite::Result<String> = row.get(i);
+                match val {
+                    Ok(s) => {
+                        obj.insert(col.clone(), serde_json::Value::String(s));
+                    }
+                    Err(_) => {
                         if let Ok(n) = row.get::<_, i64>(i) {
                             obj.insert(col.clone(), serde_json::json!(n));
                         } else if let Ok(f) = row.get::<_, f64>(i) {

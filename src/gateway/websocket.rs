@@ -1,4 +1,4 @@
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{web, HttpRequest, HttpResponse};
 use actix_ws::Message;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite;
@@ -21,13 +21,18 @@ pub async fn websocket_proxy(
     };
 
     let downstream_path = path.strip_prefix(&service.prefix).unwrap_or("/");
-    let downstream_path = if downstream_path.is_empty() { "/" } else { downstream_path };
+    let downstream_path = if downstream_path.is_empty() {
+        "/"
+    } else {
+        downstream_path
+    };
 
     // http:// → ws://, https:// → wss://
-    let ws_upstream = service.upstream
+    let ws_upstream = service
+        .upstream
         .replace("http://", "ws://")
         .replace("https://", "wss://");
-    let ws_url = format!("{}{}", ws_upstream, downstream_path);
+    let ws_url = format!("{ws_upstream}{downstream_path}");
 
     tracing::info!("WebSocket proxy: {} → {}", path, ws_url);
 
@@ -41,10 +46,12 @@ pub async fn websocket_proxy(
         Ok(conn) => conn,
         Err(e) => {
             tracing::error!("Failed to connect to upstream WebSocket {}: {}", ws_url, e);
-            let _ = client_session.close(Some(actix_ws::CloseReason {
-                code: actix_ws::CloseCode::Away,
-                description: Some(format!("Upstream connection failed: {}", e)),
-            })).await;
+            let _ = client_session
+                .close(Some(actix_ws::CloseReason {
+                    code: actix_ws::CloseCode::Away,
+                    description: Some(format!("Upstream connection failed: {e}")),
+                }))
+                .await;
             return Ok(response);
         }
     };
@@ -76,12 +83,8 @@ pub async fn websocket_proxy(
                         tracing::debug!("WS upstream→client: {} bytes (binary)", bin.len());
                         client_session_clone.binary(bin).await
                     }
-                    tungstenite::Message::Ping(data) => {
-                        client_session_clone.ping(&data).await
-                    }
-                    tungstenite::Message::Pong(data) => {
-                        client_session_clone.pong(&data).await
-                    }
+                    tungstenite::Message::Ping(data) => client_session_clone.ping(&data).await,
+                    tungstenite::Message::Pong(data) => client_session_clone.pong(&data).await,
                     tungstenite::Message::Close(frame) => {
                         let reason = frame.map(|f| actix_ws::CloseReason {
                             code: actix_ws::CloseCode::from(u16::from(f.code)),
@@ -110,12 +113,8 @@ pub async fn websocket_proxy(
                     tracing::debug!("WS client→upstream: {} bytes (binary)", bin.len());
                     tungstenite::Message::Binary(bin.to_vec())
                 }
-                Message::Ping(data) => {
-                    tungstenite::Message::Ping(data.to_vec())
-                }
-                Message::Pong(data) => {
-                    tungstenite::Message::Pong(data.to_vec())
-                }
+                Message::Ping(data) => tungstenite::Message::Ping(data.to_vec()),
+                Message::Pong(data) => tungstenite::Message::Pong(data.to_vec()),
                 Message::Close(reason) => {
                     let close_frame = reason.map(|r| {
                         let code_u16: u16 = r.code.into();

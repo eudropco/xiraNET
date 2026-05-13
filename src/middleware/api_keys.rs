@@ -52,9 +52,19 @@ impl ApiKeyManager {
     }
 
     /// Yeni key oluştur
-    pub fn create_key(&self, name: String, role: ApiKeyRole, rate_limit: Option<u32>, allowed_prefixes: Vec<String>, ttl_secs: Option<u64>) -> String {
+    pub fn create_key(
+        &self,
+        name: String,
+        role: ApiKeyRole,
+        rate_limit: Option<u32>,
+        allowed_prefixes: Vec<String>,
+        ttl_secs: Option<u64>,
+    ) -> String {
         let key = format!("xira_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         let entry = ApiKeyEntry {
             key: key.clone(),
@@ -70,7 +80,11 @@ impl ApiKeyManager {
         };
 
         self.keys.insert(key.clone(), entry);
-        tracing::info!("API key created: {}... (total: {})", &key[..8], self.keys.len());
+        tracing::info!(
+            "API key created: {} (total: {})",
+            preview_key(&key),
+            self.keys.len()
+        );
         key
     }
 
@@ -87,7 +101,10 @@ impl ApiKeyManager {
 
                 // TTL kontrolü
                 if let Some(expires) = entry.expires_at {
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
                     if now > expires {
                         return KeyValidation::Expired;
                     }
@@ -110,7 +127,10 @@ impl ApiKeyManager {
     pub fn record_usage(&self, key: &str) {
         if let Some(mut entry) = self.keys.get_mut(key) {
             entry.request_count += 1;
-            entry.last_used = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            entry.last_used = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
         }
     }
 
@@ -129,7 +149,13 @@ impl ApiKeyManager {
         if let Some(entry) = self.keys.get(old_key) {
             let entry = entry.value().clone();
             self.disable_key(old_key);
-            Some(self.create_key(entry.name, entry.role, entry.rate_limit, entry.allowed_prefixes, None))
+            Some(self.create_key(
+                entry.name,
+                entry.role,
+                entry.rate_limit,
+                entry.allowed_prefixes,
+                None,
+            ))
         } else {
             None
         }
@@ -137,25 +163,31 @@ impl ApiKeyManager {
 
     /// Tüm key'leri listele (key hariç — güvenlik)
     pub fn list_keys(&self) -> Vec<serde_json::Value> {
-        self.keys.iter().map(|entry| {
-            let e = entry.value();
-            serde_json::json!({
-                "name": e.name,
-                "role": format!("{:?}", e.role),
-                "enabled": e.enabled,
-                "created_at": e.created_at,
-                "expires_at": e.expires_at,
-                "rate_limit": e.rate_limit,
-                "request_count": e.request_count,
-                "last_used": e.last_used,
-                "key_preview": format!("{}...{}", &e.key[..8], &e.key[e.key.len()-4..]),
+        self.keys
+            .iter()
+            .map(|entry| {
+                let e = entry.value();
+                serde_json::json!({
+                    "name": e.name,
+                    "role": format!("{:?}", e.role),
+                    "enabled": e.enabled,
+                    "created_at": e.created_at,
+                    "expires_at": e.expires_at,
+                    "rate_limit": e.rate_limit,
+                    "request_count": e.request_count,
+                    "last_used": e.last_used,
+                    "key_preview": preview_key(&e.key),
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// Eski admin key'i import et (backwards compat)
     pub fn import_legacy_key(&self, key: String) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let entry = ApiKeyEntry {
             key: key.clone(),
             name: "legacy-admin".to_string(),
@@ -174,4 +206,16 @@ impl ApiKeyManager {
     pub fn key_count(&self) -> usize {
         self.keys.len()
     }
+}
+
+/// Key preview "{first8}…{last4}" — kısa key'lerde panic olmaması için bounded.
+fn preview_key(key: &str) -> String {
+    if key.len() <= 12 {
+        // Çok kısa key'i tamamen gizle; ilk N karakteri göster
+        let head: String = key.chars().take(2).collect();
+        return format!("{head}…");
+    }
+    let head: String = key.chars().take(8).collect();
+    let tail: String = key.chars().rev().take(4).collect::<String>().chars().rev().collect();
+    format!("{head}…{tail}")
 }

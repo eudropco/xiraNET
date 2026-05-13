@@ -45,7 +45,10 @@ impl EdgeCache {
         }
 
         if let Some(mut entry) = self.entries.get_mut(cache_key) {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
 
             // TTL expired?
             if now > entry.created_at + entry.ttl_secs {
@@ -59,7 +62,9 @@ impl EdgeCache {
             // ETag conditional check
             if let Some(client_etag) = if_none_match {
                 if client_etag == entry.etag || client_etag == format!("\"{}\"", entry.etag) {
-                    return CacheDecision::NotModified { etag: entry.etag.clone() };
+                    return CacheDecision::NotModified {
+                        etag: entry.etag.clone(),
+                    };
                 }
             }
 
@@ -70,21 +75,39 @@ impl EdgeCache {
     }
 
     /// Response'u cache'e yaz
-    pub fn store(&self, cache_key: String, body: Vec<u8>, content_type: String, status: u16, headers: Vec<(String, String)>, ttl_secs: u64) -> String {
+    pub fn store(
+        &self,
+        cache_key: String,
+        body: Vec<u8>,
+        content_type: String,
+        status: u16,
+        headers: Vec<(String, String)>,
+        ttl_secs: u64,
+    ) -> String {
         // Eviction if needed
         if self.entries.len() >= self.max_entries {
             // En eski entry'yi kaldır
-            if let Some(oldest_key) = self.entries.iter().min_by_key(|e| e.value().created_at).map(|e| e.key().clone()) {
+            if let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|e| e.value().created_at)
+                .map(|e| e.key().clone())
+            {
                 self.entries.remove(&oldest_key);
             }
         }
 
-        // ETag oluştur
+        // ETag — SHA-256 (DefaultHasher kararsız hash; cache key bütünlüğü için kripto hash şart)
         let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            body.hash(&mut hasher);
-            format!("{:x}", hasher.finish())
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(&body);
+            // İlk 16 byte'i hex olarak — kısa ETag yeterli
+            let mut s = String::with_capacity(32);
+            for b in &digest[..16] {
+                use std::fmt::Write;
+                let _ = write!(s, "{b:02x}");
+            }
+            s
         };
 
         let entry = EdgeCacheEntry {
@@ -93,7 +116,10 @@ impl EdgeCache {
             content_type,
             status,
             headers,
-            created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
             ttl_secs,
             hits: 0,
         };
