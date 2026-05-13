@@ -1,39 +1,24 @@
 [workspace]
-members = [
-    ".",
-    "crates/xira-common",
-    "crates/xira-security",
-    "crates/xira-auth",
-    "crates/xira-ops",
-    "crates/xira-flow",
-    "crates/xira-gateway",
-]
+# crates/ ağacı eskiden src/ paralel ağaçtı; security yamaları src/'de kaldı,
+# crates/ stale fork'tu. v3.0.0'da silindi — tek truth source: src/.
+members = ["."]
 resolver = "2"
 
 [package]
 name = "xiranet"
 version = "3.0.0"
 edition = "2021"
+rust-version = "1.88"
 description = "XIRA Platform — Modular Infrastructure Hub"
 authors = ["valverde"]
-
-[[bin]]
-name = "xira"
-path = "src/main.rs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/valverde/xiranet"
 
 [[bin]]
 name = "xiranet"
 path = "src/main.rs"
 
 [dependencies]
-# XIRA Platform crates
-xira-common = { path = "crates/xira-common" }
-xira-security = { path = "crates/xira-security" }
-xira-auth = { path = "crates/xira-auth" }
-xira-ops = { path = "crates/xira-ops" }
-xira-flow = { path = "crates/xira-flow" }
-xira-gateway = { path = "crates/xira-gateway" }
-
 # Web framework
 actix-web = { version = "4", features = ["rustls-0_23", "compress-gzip", "compress-brotli", "compress-zstd"] }
 actix-rt = "2"
@@ -50,7 +35,7 @@ serde_json = "1"
 toml = "0.8"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Logging & Tracing
 tracing = "0.1"
@@ -60,6 +45,13 @@ tracing-appender = "0.2"
 # Auth
 jsonwebtoken = "9"
 argon2 = "0.5"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2"
+# Symmetric encryption — at-rest (MFA seeds, OAuth2 client secrets)
+aes-gcm = "0.10"
+base64 = "0.22"
 
 # Concurrent data structures
 dashmap = "6"
@@ -121,3 +113,9 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 
 # Regex (body transform)
 regex = "1"
+
+# DNS SRV resolver (service discovery)
+hickory-resolver = "0.24"
+
+# Error handling
+thiserror = "1"

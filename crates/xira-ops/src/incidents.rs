@@ -19,11 +19,27 @@ pub struct Incident {
     pub postmortem: Option<String>,
 }
 
-#[derive(Clone, Debug, serde::Serialize)] pub enum Severity { Critical, Major, Minor, Info }
-#[derive(Clone, Debug, serde::Serialize, PartialEq)] pub enum IncidentStatus { Investigating, Identified, Monitoring, Resolved }
+#[derive(Clone, Debug, serde::Serialize)]
+pub enum Severity {
+    Critical,
+    Major,
+    Minor,
+    Info,
+}
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub enum IncidentStatus {
+    Investigating,
+    Identified,
+    Monitoring,
+    Resolved,
+}
 
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct TimelineEntry { pub timestamp: u64, pub message: String, pub author: String }
+pub struct TimelineEntry {
+    pub timestamp: u64,
+    pub message: String,
+    pub author: String,
+}
 
 impl Default for IncidentManager {
     fn default() -> Self {
@@ -32,17 +48,34 @@ impl Default for IncidentManager {
 }
 
 impl IncidentManager {
-    pub fn new() -> Self { Self { incidents: Arc::new(RwLock::new(Vec::new())) } }
+    pub fn new() -> Self {
+        Self {
+            incidents: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
 
     /// Yeni incident oluştur
     pub async fn create(&self, title: String, severity: Severity, services: Vec<String>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let incident = Incident {
-            id: id.clone(), title: title.clone(), severity, status: IncidentStatus::Investigating,
-            affected_services: services, created_at: now, resolved_at: None, postmortem: None,
-            timeline: vec![TimelineEntry { timestamp: now, message: format!("Incident created: {}", title), author: "system".into() }],
+            id: id.clone(),
+            title: title.clone(),
+            severity,
+            status: IncidentStatus::Investigating,
+            affected_services: services,
+            created_at: now,
+            resolved_at: None,
+            postmortem: None,
+            timeline: vec![TimelineEntry {
+                timestamp: now,
+                message: format!("Incident created: {}", title),
+                author: "system".into(),
+            }],
         };
 
         self.incidents.write().await.push(incident);
@@ -52,17 +85,29 @@ impl IncidentManager {
 
     /// Timeline'a güncelleme ekle
     pub async fn add_update(&self, id: &str, message: String, author: String) -> bool {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let mut incidents = self.incidents.write().await;
         if let Some(incident) = incidents.iter_mut().find(|i| i.id == id) {
-            incident.timeline.push(TimelineEntry { timestamp: now, message, author });
+            incident.timeline.push(TimelineEntry {
+                timestamp: now,
+                message,
+                author,
+            });
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     /// Durumu güncelle
     pub async fn update_status(&self, id: &str, status: IncidentStatus) -> bool {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let mut incidents = self.incidents.write().await;
         if let Some(incident) = incidents.iter_mut().find(|i| i.id == id) {
             incident.status = status.clone();
@@ -70,10 +115,14 @@ impl IncidentManager {
                 incident.resolved_at = Some(now);
             }
             incident.timeline.push(TimelineEntry {
-                timestamp: now, message: format!("Status changed to {:?}", status), author: "system".into(),
+                timestamp: now,
+                message: format!("Status changed to {:?}", status),
+                author: "system".into(),
             });
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     /// Postmortem ekle
@@ -82,16 +131,24 @@ impl IncidentManager {
         if let Some(incident) = incidents.iter_mut().find(|i| i.id == id) {
             incident.postmortem = Some(postmortem);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     /// Aktif incident'lar
     pub async fn active(&self) -> Vec<Incident> {
-        self.incidents.read().await.iter()
+        self.incidents
+            .read()
+            .await
+            .iter()
             .filter(|i| i.status != IncidentStatus::Resolved)
-            .cloned().collect()
+            .cloned()
+            .collect()
     }
 
     /// Tümü
-    pub async fn list(&self) -> Vec<Incident> { self.incidents.read().await.clone() }
+    pub async fn list(&self) -> Vec<Incident> {
+        self.incidents.read().await.clone()
+    }
 }

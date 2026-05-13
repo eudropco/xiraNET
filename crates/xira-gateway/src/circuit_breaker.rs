@@ -6,9 +6,9 @@ use uuid::Uuid;
 /// Circuit Breaker durumları
 #[derive(Debug, Clone, PartialEq)]
 pub enum CircuitState {
-    Closed,     // Normal — istekler geçer
-    Open,       // Devre açık — istekler reddedilir
-    HalfOpen,   // Yarı açık — sınırlı istek test amaçlı geçer
+    Closed,   // Normal — istekler geçer
+    Open,     // Devre açık — istekler reddedilir
+    HalfOpen, // Yarı açık — sınırlı istek test amaçlı geçer
 }
 
 impl std::fmt::Display for CircuitState {
@@ -39,7 +39,11 @@ pub struct CircuitBreakerManager {
 }
 
 impl CircuitBreakerManager {
-    pub fn new(failure_threshold: u32, reset_timeout_secs: u64, half_open_max_requests: u32) -> Self {
+    pub fn new(
+        failure_threshold: u32,
+        reset_timeout_secs: u64,
+        half_open_max_requests: u32,
+    ) -> Self {
         Self {
             breakers: Arc::new(DashMap::new()),
             failure_threshold,
@@ -50,13 +54,16 @@ impl CircuitBreakerManager {
 
     /// İsteğe izin verilip verilmediğini kontrol et
     pub fn allow_request(&self, service_id: &Uuid) -> Result<(), CircuitState> {
-        let mut entry = self.breakers.entry(*service_id).or_insert(CircuitBreakerEntry {
-            state: CircuitState::Closed,
-            failure_count: 0,
-            success_count_half_open: 0,
-            last_failure_time: None,
-            last_state_change: Instant::now(),
-        });
+        let mut entry = self
+            .breakers
+            .entry(*service_id)
+            .or_insert(CircuitBreakerEntry {
+                state: CircuitState::Closed,
+                failure_count: 0,
+                success_count_half_open: 0,
+                last_failure_time: None,
+                last_state_change: Instant::now(),
+            });
 
         match entry.state {
             CircuitState::Closed => Ok(()),
@@ -111,13 +118,16 @@ impl CircuitBreakerManager {
 
     /// Başarısız istek kaydet
     pub fn record_failure(&self, service_id: &Uuid) {
-        let mut entry = self.breakers.entry(*service_id).or_insert(CircuitBreakerEntry {
-            state: CircuitState::Closed,
-            failure_count: 0,
-            success_count_half_open: 0,
-            last_failure_time: None,
-            last_state_change: Instant::now(),
-        });
+        let mut entry = self
+            .breakers
+            .entry(*service_id)
+            .or_insert(CircuitBreakerEntry {
+                state: CircuitState::Closed,
+                failure_count: 0,
+                success_count_half_open: 0,
+                last_failure_time: None,
+                last_state_change: Instant::now(),
+            });
 
         entry.failure_count += 1;
         entry.last_failure_time = Some(Instant::now());
@@ -129,14 +139,18 @@ impl CircuitBreakerManager {
                     entry.last_state_change = Instant::now();
                     tracing::warn!(
                         "🔴 Circuit breaker {} → OPEN (failures: {})",
-                        service_id, entry.failure_count
+                        service_id,
+                        entry.failure_count
                     );
                 }
             }
             CircuitState::HalfOpen => {
                 entry.state = CircuitState::Open;
                 entry.last_state_change = Instant::now();
-                tracing::warn!("🔴 Circuit breaker {} → OPEN (half-open failed)", service_id);
+                tracing::warn!(
+                    "🔴 Circuit breaker {} → OPEN (half-open failed)",
+                    service_id
+                );
             }
             _ => {}
         }

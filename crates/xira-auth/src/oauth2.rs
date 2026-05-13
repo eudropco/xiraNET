@@ -101,10 +101,9 @@ where
             Some(t) => t,
             None => {
                 return Box::pin(async move {
-                    let response = HttpResponse::Unauthorized()
-                        .json(serde_json::json!({
-                            "error": "Missing Bearer token for OAuth2"
-                        }));
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Missing Bearer token for OAuth2"
+                    }));
                     Ok(req.into_response(response).map_into_right_body())
                 });
             }
@@ -121,7 +120,10 @@ where
             let introspect_result = client
                 .post(url.as_str())
                 .basic_auth(client_id.as_str(), Some(client_secret.as_str()))
-                .form(&[("token", token.as_str()), ("token_type_hint", "access_token")])
+                .form(&[
+                    ("token", token.as_str()),
+                    ("token_type_hint", "access_token"),
+                ])
                 .timeout(std::time::Duration::from_secs(5))
                 .send()
                 .await;
@@ -129,21 +131,27 @@ where
             match introspect_result {
                 Ok(resp) => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
-                        let active = body.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let active = body
+                            .get("active")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
                         if active {
                             let res = fut.await?;
                             return Ok(res.map_into_left_body());
                         }
                     }
 
-                    Err(actix_web::error::ErrorUnauthorized("Token is not active or invalid"))
+                    Err(actix_web::error::ErrorUnauthorized(
+                        "Token is not active or invalid",
+                    ))
                 }
                 Err(e) => {
                     tracing::error!("OAuth2 introspection failed: {}", e);
                     // Fail-closed: introspection başarısız olduğunda isteği reddet
-                    Err(actix_web::error::ErrorServiceUnavailable(
-                        format!("OAuth2 introspection unavailable: {}", e)
-                    ))
+                    Err(actix_web::error::ErrorServiceUnavailable(format!(
+                        "OAuth2 introspection unavailable: {}",
+                        e
+                    )))
                 }
             }
         })

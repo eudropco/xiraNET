@@ -64,13 +64,16 @@ impl ResponseCache {
         }
 
         let mut cache = self.cache.lock().unwrap();
-        cache.put(key, CachedResponse {
-            status,
-            headers,
-            body,
-            cached_at: Instant::now(),
-            ttl: self.ttl,
-        });
+        cache.put(
+            key,
+            CachedResponse {
+                status,
+                headers,
+                body,
+                cached_at: Instant::now(),
+                ttl: self.ttl,
+            },
+        );
     }
 
     /// Cache key oluştur (method + path + query)

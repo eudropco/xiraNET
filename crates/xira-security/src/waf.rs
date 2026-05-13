@@ -1,6 +1,17 @@
 use regex::Regex;
 use std::collections::HashSet;
 
+fn safe_truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Web Application Firewall — SQL injection, XSS, path traversal detection
 pub struct Waf {
     enabled: bool,
@@ -56,7 +67,14 @@ impl Waf {
     }
 
     /// Request'i WAF kurallarına karşı kontrol et
-    pub fn inspect(&self, path: &str, query: Option<&str>, body: &str, headers: &[(String, String)], ip: &str) -> WafVerdict {
+    pub fn inspect(
+        &self,
+        path: &str,
+        query: Option<&str>,
+        body: &str,
+        headers: &[(String, String)],
+        ip: &str,
+    ) -> WafVerdict {
         if !self.enabled {
             return WafVerdict::Allow;
         }
@@ -70,25 +88,36 @@ impl Waf {
         }
 
         // Tüm inputları birleştir
-        let inputs = [path.to_string(),
+        let inputs = [
+            path.to_string(),
             query.unwrap_or("").to_string(),
-            body.to_string()];
+            body.to_string(),
+        ];
 
         // Header değerlerini de kontrol et
         let header_values: Vec<String> = headers.iter().map(|(_, v)| v.clone()).collect();
 
-        let all_inputs: Vec<&str> = inputs.iter().chain(header_values.iter()).map(|s| s.as_str()).collect();
+        let all_inputs: Vec<&str> = inputs
+            .iter()
+            .chain(header_values.iter())
+            .map(|s| s.as_str())
+            .collect();
 
         // SQL Injection check
         for input in &all_inputs {
             for pattern in &self.sql_patterns {
                 if pattern.is_match(input) {
                     let verdict = WafVerdict::Block {
-                        reason: format!("SQL injection detected in: {}...", &input[..input.len().min(50)]),
+                        reason: format!(
+                            "SQL injection detected in: {}...",
+                            safe_truncate(input, 50)
+                        ),
                         rule: "SQLI".to_string(),
                     };
-                    tracing::warn!("🛡️ WAF SQLI: {} from {}", &input[..input.len().min(80)], ip);
-                    if self.mode == WafMode::DetectOnly { return WafVerdict::Allow; }
+                    tracing::warn!("🛡️ WAF SQLI: {} from {}", safe_truncate(input, 80), ip);
+                    if self.mode == WafMode::DetectOnly {
+                        return WafVerdict::Allow;
+                    }
                     return verdict;
                 }
             }
@@ -99,11 +128,13 @@ impl Waf {
             for pattern in &self.xss_patterns {
                 if pattern.is_match(input) {
                     let verdict = WafVerdict::Block {
-                        reason: format!("XSS detected in: {}...", &input[..input.len().min(50)]),
+                        reason: format!("XSS detected in: {}...", safe_truncate(input, 50)),
                         rule: "XSS".to_string(),
                     };
-                    tracing::warn!("🛡️ WAF XSS: {} from {}", &input[..input.len().min(80)], ip);
-                    if self.mode == WafMode::DetectOnly { return WafVerdict::Allow; }
+                    tracing::warn!("🛡️ WAF XSS: {} from {}", safe_truncate(input, 80), ip);
+                    if self.mode == WafMode::DetectOnly {
+                        return WafVerdict::Allow;
+                    }
                     return verdict;
                 }
             }
@@ -114,11 +145,20 @@ impl Waf {
             for pattern in &self.traversal_patterns {
                 if pattern.is_match(input) {
                     let verdict = WafVerdict::Block {
-                        reason: format!("Path traversal detected: {}...", &input[..input.len().min(50)]),
+                        reason: format!(
+                            "Path traversal detected: {}...",
+                            safe_truncate(input, 50)
+                        ),
                         rule: "TRAVERSAL".to_string(),
                     };
-                    tracing::warn!("🛡️ WAF TRAVERSAL: {} from {}", &input[..input.len().min(80)], ip);
-                    if self.mode == WafMode::DetectOnly { return WafVerdict::Allow; }
+                    tracing::warn!(
+                        "🛡️ WAF TRAVERSAL: {} from {}",
+                        safe_truncate(input, 80),
+                        ip
+                    );
+                    if self.mode == WafMode::DetectOnly {
+                        return WafVerdict::Allow;
+                    }
                     return verdict;
                 }
             }

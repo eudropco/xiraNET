@@ -55,7 +55,11 @@ pub struct ServiceEntry {
 
 impl ServiceEntry {
     pub fn new(name: String, prefix: String, upstream: String, health_endpoint: String) -> Self {
-        let prefix = if prefix.starts_with('/') { prefix } else { format!("/{}", prefix) };
+        let prefix = if prefix.starts_with('/') {
+            prefix
+        } else {
+            format!("/{}", prefix)
+        };
         let prefix = prefix.trim_end_matches('/').to_string();
 
         Self {
@@ -145,10 +149,18 @@ pub struct ApiResponse<T: Serialize> {
 
 impl<T: Serialize> ApiResponse<T> {
     pub fn ok(message: impl Into<String>, data: T) -> Self {
-        Self { success: true, message: message.into(), data: Some(data) }
+        Self {
+            success: true,
+            message: message.into(),
+            data: Some(data),
+        }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self { success: false, message: message.into(), data: None }
+        Self {
+            success: false,
+            message: message.into(),
+            data: None,
+        }
     }
 }

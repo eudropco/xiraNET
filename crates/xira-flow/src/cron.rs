@@ -57,7 +57,10 @@ impl CronScheduler {
     pub fn new() -> Self {
         Self {
             jobs: Arc::new(RwLock::new(Vec::new())),
-            client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().unwrap(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap(),
             storage: None,
         }
     }
@@ -77,7 +80,7 @@ impl CronScheduler {
                 run_count INTEGER DEFAULT 0,
                 last_status INTEGER,
                 failure_count INTEGER DEFAULT 0
-            )"
+            )",
         );
 
         let mut loaded_jobs = Vec::new();
@@ -112,7 +115,10 @@ impl CronScheduler {
 
         Self {
             jobs: Arc::new(RwLock::new(loaded_jobs)),
-            client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().unwrap(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap(),
             storage: Some(storage),
         }
     }
@@ -141,15 +147,34 @@ impl CronScheduler {
     }
 
     /// İş ekle
-    pub async fn add_job(&self, name: String, schedule: CronSchedule, url: String, method: String) -> String {
+    pub async fn add_job(
+        &self,
+        name: String,
+        schedule: CronSchedule,
+        url: String,
+        method: String,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let job = CronJob {
-            id: id.clone(), name, schedule: schedule.clone(),
-            url, method, headers: vec![], body: None,
-            enabled: true, last_run: 0, next_run: now + schedule.interval_secs(),
-            run_count: 0, last_status: None, last_duration_ms: 0.0, failure_count: 0,
+            id: id.clone(),
+            name,
+            schedule: schedule.clone(),
+            url,
+            method,
+            headers: vec![],
+            body: None,
+            enabled: true,
+            last_run: 0,
+            next_run: now + schedule.interval_secs(),
+            run_count: 0,
+            last_status: None,
+            last_duration_ms: 0.0,
+            failure_count: 0,
         };
 
         self.persist_job(&job);
@@ -160,11 +185,16 @@ impl CronScheduler {
 
     /// Zamanı gelen işleri çalıştır
     pub async fn tick(&self) {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let mut jobs = self.jobs.write().await;
 
         for job in jobs.iter_mut() {
-            if !job.enabled || now < job.next_run { continue; }
+            if !job.enabled || now < job.next_run {
+                continue;
+            }
 
             let start = std::time::Instant::now();
             let result = match job.method.to_uppercase().as_str() {
@@ -182,8 +212,15 @@ impl CronScheduler {
             match result {
                 Ok(resp) => {
                     job.last_status = Some(resp.status().as_u16());
-                    if !resp.status().is_success() { job.failure_count += 1; }
-                    tracing::info!("Cron [{}] → {} ({}ms)", job.name, resp.status(), job.last_duration_ms as u64);
+                    if !resp.status().is_success() {
+                        job.failure_count += 1;
+                    }
+                    tracing::info!(
+                        "Cron [{}] → {} ({}ms)",
+                        job.name,
+                        resp.status(),
+                        job.last_duration_ms as u64
+                    );
                 }
                 Err(e) => {
                     job.failure_count += 1;
@@ -214,7 +251,10 @@ impl CronScheduler {
     /// İş kaldır (parameterized — SQL injection safe)
     pub async fn remove_job(&self, id: &str) -> bool {
         if let Some(ref storage) = self.storage {
-            let _ = storage.execute_params("DELETE FROM cron_jobs WHERE id = ?1", &[&id as &dyn xira_common::rusqlite::types::ToSql]);
+            let _ = storage.execute_params(
+                "DELETE FROM cron_jobs WHERE id = ?1",
+                &[&id as &dyn xira_common::rusqlite::types::ToSql],
+            );
         }
         let mut jobs = self.jobs.write().await;
         let len = jobs.len();

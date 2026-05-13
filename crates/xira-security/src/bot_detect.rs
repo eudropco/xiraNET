@@ -30,15 +30,32 @@ impl BotDetector {
         Self {
             enabled,
             known_bots: vec![
-                "Googlebot".into(), "Bingbot".into(), "Slurp".into(),
-                "DuckDuckBot".into(), "Baiduspider".into(), "YandexBot".into(),
-                "Sogou".into(), "facebookexternalhit".into(), "Twitterbot".into(),
-                "rogerbot".into(), "linkedinbot".into(), "embedly".into(),
-                "quora link preview".into(), "showyoubot".into(), "outbrain".into(),
-                "pinterest".into(), "applebot".into(), "Scrapy".into(),
-                "python-requests".into(), "curl".into(), "wget".into(),
-                "httpie".into(), "Go-http-client".into(), "Java".into(),
-                "Apache-HttpClient".into(), "okhttp".into(),
+                "Googlebot".into(),
+                "Bingbot".into(),
+                "Slurp".into(),
+                "DuckDuckBot".into(),
+                "Baiduspider".into(),
+                "YandexBot".into(),
+                "Sogou".into(),
+                "facebookexternalhit".into(),
+                "Twitterbot".into(),
+                "rogerbot".into(),
+                "linkedinbot".into(),
+                "embedly".into(),
+                "quora link preview".into(),
+                "showyoubot".into(),
+                "outbrain".into(),
+                "pinterest".into(),
+                "applebot".into(),
+                "Scrapy".into(),
+                "python-requests".into(),
+                "curl".into(),
+                "wget".into(),
+                "httpie".into(),
+                "Go-http-client".into(),
+                "Java".into(),
+                "Apache-HttpClient".into(),
+                "okhttp".into(),
             ],
             ip_tracker: DashMap::new(),
             block_bots,
@@ -48,12 +65,19 @@ impl BotDetector {
 
     /// User-Agent ve IP analiz et
     pub fn check(&self, ip: &str, user_agent: &str) -> BotVerdict {
-        if !self.enabled { return BotVerdict::Human; }
+        if !self.enabled {
+            return BotVerdict::Human;
+        }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // Known bot check
-        let bot_name = self.known_bots.iter()
+        let bot_name = self
+            .known_bots
+            .iter()
             .find(|bot| user_agent.to_lowercase().contains(&bot.to_lowercase()))
             .cloned();
 
@@ -81,7 +105,12 @@ impl BotDetector {
                 return BotVerdict::Blocked;
             }
             if tracker.request_count > self.crawl_rate_limit {
-                tracing::warn!("Bot rate limited: {} ({}) — {}/min", ip, user_agent, tracker.request_count);
+                tracing::warn!(
+                    "Bot rate limited: {} ({}) — {}/min",
+                    ip,
+                    user_agent,
+                    tracker.request_count
+                );
                 return BotVerdict::RateLimited;
             }
             return BotVerdict::Bot {

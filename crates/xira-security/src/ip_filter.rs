@@ -92,7 +92,11 @@ fn ip_matches_cidr(ip: &str, cidr: &str) -> bool {
         (IpAddr::V4(cidr_v4), IpAddr::V4(target_v4)) => {
             let cidr_bits = u32::from(cidr_v4);
             let target_bits = u32::from(target_v4);
-            let mask = if prefix_len >= 32 { u32::MAX } else { !((1u32 << (32 - prefix_len)) - 1) };
+            let mask = if prefix_len >= 32 {
+                u32::MAX
+            } else {
+                !((1u32 << (32 - prefix_len)) - 1)
+            };
             (cidr_bits & mask) == (target_bits & mask)
         }
         _ => false,
@@ -181,11 +185,10 @@ where
         if !self.is_allowed(&ip) {
             tracing::warn!("IP blocked: {}", ip);
             return Box::pin(async move {
-                let response = HttpResponse::Forbidden()
-                    .json(serde_json::json!({
-                        "error": "Access denied",
-                        "message": "Your IP address is not allowed"
-                    }));
+                let response = HttpResponse::Forbidden().json(serde_json::json!({
+                    "error": "Access denied",
+                    "message": "Your IP address is not allowed"
+                }));
                 Ok(req.into_response(response).map_into_right_body())
             });
         }

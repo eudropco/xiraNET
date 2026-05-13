@@ -1,5 +1,5 @@
-use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_appender::rolling;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Gelişmiş tracing konfigürasyonu: console + file + OpenTelemetry-ready
 pub fn init_tracing(log_level: &str, file_enabled: bool, file_path: &str, rotation: &str) {

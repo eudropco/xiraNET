@@ -77,7 +77,12 @@ impl BodyTransformConfig {
 
         let redact_value = Value::String(self.redact_value.clone());
 
-        Self::transform_value(&mut json, &self.redact_fields, &self.remove_response_fields, &redact_value);
+        Self::transform_value(
+            &mut json,
+            &self.redact_fields,
+            &self.remove_response_fields,
+            &redact_value,
+        );
 
         serde_json::to_vec(&json).ok()
     }

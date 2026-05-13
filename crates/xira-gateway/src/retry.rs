@@ -33,11 +33,14 @@ impl RetryPolicy {
             if attempt > 0 {
                 tracing::debug!(
                     "Retry attempt {}/{} for {} (delay: {:?})",
-                    attempt, self.max_retries, url, delay
+                    attempt,
+                    self.max_retries,
+                    url,
+                    delay
                 );
                 tokio::time::sleep(delay).await;
                 delay = Duration::from_millis(
-                    (delay.as_millis() as f64 * self.backoff_multiplier) as u64
+                    (delay.as_millis() as f64 * self.backoff_multiplier) as u64,
                 );
             }
 
@@ -58,7 +61,10 @@ impl RetryPolicy {
                     if status.is_server_error() && attempt < self.max_retries {
                         tracing::warn!(
                             "Got {} from {} (attempt {}/{}), retrying...",
-                            status, url, attempt + 1, self.max_retries
+                            status,
+                            url,
+                            attempt + 1,
+                            self.max_retries
                         );
                         last_error = None;
                         continue;
@@ -70,7 +76,10 @@ impl RetryPolicy {
                     if e.is_connect() || e.is_timeout() {
                         tracing::warn!(
                             "Request failed for {} (attempt {}/{}): {}",
-                            url, attempt + 1, self.max_retries, e
+                            url,
+                            attempt + 1,
+                            self.max_retries,
+                            e
                         );
                         last_error = Some(e);
                         continue;

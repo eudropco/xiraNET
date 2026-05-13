@@ -41,27 +41,48 @@ impl AlertDispatcher {
     }
 
     pub fn add_channel(&mut self, channel: AlertChannel) {
-        tracing::info!("Alert channel added: {} ({})", channel.name, match &channel.channel_type {
-            ChannelType::Slack => "Slack",
-            ChannelType::Discord => "Discord",
-            ChannelType::Telegram { .. } => "Telegram",
-            ChannelType::PagerDuty { .. } => "PagerDuty",
-            ChannelType::GenericWebhook => "Webhook",
-        });
+        tracing::info!(
+            "Alert channel added: {} ({})",
+            channel.name,
+            match &channel.channel_type {
+                ChannelType::Slack => "Slack",
+                ChannelType::Discord => "Discord",
+                ChannelType::Telegram { .. } => "Telegram",
+                ChannelType::PagerDuty { .. } => "PagerDuty",
+                ChannelType::GenericWebhook => "Webhook",
+            }
+        );
         self.channels.push(channel);
     }
 
     /// Tüm kanallara alert gönder
     pub async fn dispatch(&self, title: &str, message: &str, severity: &str) {
         for channel in &self.channels {
-            if !channel.enabled { continue; }
+            if !channel.enabled {
+                continue;
+            }
 
             let result = match &channel.channel_type {
-                ChannelType::Slack => self.send_slack(&channel.url, title, message, severity).await,
-                ChannelType::Discord => self.send_discord(&channel.url, title, message, severity).await,
-                ChannelType::Telegram { chat_id } => self.send_telegram(&channel.url, chat_id, title, message).await,
-                ChannelType::PagerDuty { routing_key } => self.send_pagerduty(&channel.url, routing_key, title, message, severity).await,
-                ChannelType::GenericWebhook => self.send_webhook(&channel.url, title, message, severity).await,
+                ChannelType::Slack => {
+                    self.send_slack(&channel.url, title, message, severity)
+                        .await
+                }
+                ChannelType::Discord => {
+                    self.send_discord(&channel.url, title, message, severity)
+                        .await
+                }
+                ChannelType::Telegram { chat_id } => {
+                    self.send_telegram(&channel.url, chat_id, title, message)
+                        .await
+                }
+                ChannelType::PagerDuty { routing_key } => {
+                    self.send_pagerduty(&channel.url, routing_key, title, message, severity)
+                        .await
+                }
+                ChannelType::GenericWebhook => {
+                    self.send_webhook(&channel.url, title, message, severity)
+                        .await
+                }
             };
 
             if let Err(e) = result {
@@ -70,8 +91,18 @@ impl AlertDispatcher {
         }
     }
 
-    async fn send_slack(&self, url: &str, title: &str, msg: &str, severity: &str) -> Result<(), String> {
-        let color = match severity { "critical" => "#dc2626", "warning" => "#f59e0b", _ => "#10b981" };
+    async fn send_slack(
+        &self,
+        url: &str,
+        title: &str,
+        msg: &str,
+        severity: &str,
+    ) -> Result<(), String> {
+        let color = match severity {
+            "critical" => "#dc2626",
+            "warning" => "#f59e0b",
+            _ => "#10b981",
+        };
         let payload = serde_json::json!({
             "attachments": [{
                 "color": color,
@@ -81,12 +112,27 @@ impl AlertDispatcher {
                 "ts": chrono::Utc::now().timestamp()
             }]
         });
-        self.client.post(url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        self.client
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn send_discord(&self, url: &str, title: &str, msg: &str, severity: &str) -> Result<(), String> {
-        let color = match severity { "critical" => 0xdc2626u32, "warning" => 0xf59e0b, _ => 0x10b981 };
+    async fn send_discord(
+        &self,
+        url: &str,
+        title: &str,
+        msg: &str,
+        severity: &str,
+    ) -> Result<(), String> {
+        let color = match severity {
+            "critical" => 0xdc2626u32,
+            "warning" => 0xf59e0b,
+            _ => 0x10b981,
+        };
         let payload = serde_json::json!({
             "embeds": [{
                 "title": format!("⚡ XIRA — {}", title),
@@ -96,11 +142,22 @@ impl AlertDispatcher {
                 "timestamp": chrono::Utc::now().to_rfc3339()
             }]
         });
-        self.client.post(url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        self.client
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn send_telegram(&self, bot_token: &str, chat_id: &str, title: &str, msg: &str) -> Result<(), String> {
+    async fn send_telegram(
+        &self,
+        bot_token: &str,
+        chat_id: &str,
+        title: &str,
+        msg: &str,
+    ) -> Result<(), String> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", bot_token);
         let text = format!("*⚡ XIRA — {}*\n{}", title, msg);
         let payload = serde_json::json!({
@@ -108,11 +165,23 @@ impl AlertDispatcher {
             "text": text,
             "parse_mode": "Markdown"
         });
-        self.client.post(&url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        self.client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn send_pagerduty(&self, url: &str, routing_key: &str, title: &str, msg: &str, severity: &str) -> Result<(), String> {
+    async fn send_pagerduty(
+        &self,
+        url: &str,
+        routing_key: &str,
+        title: &str,
+        msg: &str,
+        severity: &str,
+    ) -> Result<(), String> {
         let payload = serde_json::json!({
             "routing_key": routing_key,
             "event_action": "trigger",
@@ -123,11 +192,22 @@ impl AlertDispatcher {
                 "custom_details": { "message": msg }
             }
         });
-        self.client.post(url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        self.client
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn send_webhook(&self, url: &str, title: &str, msg: &str, severity: &str) -> Result<(), String> {
+    async fn send_webhook(
+        &self,
+        url: &str,
+        title: &str,
+        msg: &str,
+        severity: &str,
+    ) -> Result<(), String> {
         let payload = serde_json::json!({
             "source": "xiranet",
             "title": title,
@@ -135,7 +215,12 @@ impl AlertDispatcher {
             "severity": severity,
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
-        self.client.post(url).json(&payload).send().await.map_err(|e| e.to_string())?;
+        self.client
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 

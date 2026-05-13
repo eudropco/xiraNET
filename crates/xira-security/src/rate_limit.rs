@@ -93,7 +93,7 @@ where
             let remaining = window_duration
                 .checked_sub(now.duration_since(entry.window_start))
                 .unwrap_or_default();
-            
+
             drop(entry);
 
             tracing::warn!("Rate limit exceeded for IP: {}", ip);

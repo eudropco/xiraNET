@@ -31,7 +31,9 @@ impl ConnectionPool {
 
         tracing::info!(
             "Connection pool initialized: size={}, timeout={}s, keepalive={}s",
-            pool_size, timeout_secs, keep_alive_secs
+            pool_size,
+            timeout_secs,
+            keep_alive_secs
         );
 
         Self {

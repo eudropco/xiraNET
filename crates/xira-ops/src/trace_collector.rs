@@ -37,21 +37,32 @@ impl TraceCollector {
 
     /// Yeni trace başlat
     pub fn start_trace(&self, request_id: &str) -> String {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // Eviction
         if self.traces.len() >= self.max_traces {
-            if let Some(oldest) = self.traces.iter().min_by_key(|e| e.value().started_at).map(|e| e.key().clone()) {
+            if let Some(oldest) = self
+                .traces
+                .iter()
+                .min_by_key(|e| e.value().started_at)
+                .map(|e| e.key().clone())
+            {
                 self.traces.remove(&oldest);
             }
         }
 
-        self.traces.insert(request_id.to_string(), TraceTree {
-            trace_id: request_id.to_string(),
-            spans: Vec::new(),
-            started_at: now,
-            total_duration_ms: 0.0,
-        });
+        self.traces.insert(
+            request_id.to_string(),
+            TraceTree {
+                trace_id: request_id.to_string(),
+                spans: Vec::new(),
+                started_at: now,
+                total_duration_ms: 0.0,
+            },
+        );
 
         request_id.to_string()
     }
@@ -61,7 +72,11 @@ impl TraceCollector {
         if let Some(mut tree) = self.traces.get_mut(trace_id) {
             tree.spans.push(span);
             // total duration recalc
-            tree.total_duration_ms = tree.spans.iter().map(|s| s.start_ms + s.duration_ms).fold(0.0f64, f64::max);
+            tree.total_duration_ms = tree
+                .spans
+                .iter()
+                .map(|s| s.start_ms + s.duration_ms)
+                .fold(0.0f64, f64::max);
         }
     }
 

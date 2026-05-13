@@ -1,8 +1,8 @@
-pub mod metrics;
-pub mod sla;
 pub mod advanced;
-pub mod trace_collector;
-pub mod uptime;
+pub mod alerting;
 pub mod incidents;
 pub mod log_aggregator;
-pub mod alerting;
+pub mod metrics;
+pub mod sla;
+pub mod trace_collector;
+pub mod uptime;

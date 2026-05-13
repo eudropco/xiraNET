@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned toolchain — reproducible builds. Bump in tandem with Cargo.toml MSRV.
+# `edition = 2021` + recent dep'ler (jsonwebtoken 9, aes-gcm 0.10, hickory-resolver 0.24)
+# için 1.88 yeterli.
+channel = "1.88"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

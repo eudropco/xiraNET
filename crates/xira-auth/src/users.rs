@@ -80,7 +80,7 @@ impl UserManager {
                 enabled INTEGER DEFAULT 1,
                 mfa_enabled INTEGER DEFAULT 0,
                 mfa_secret TEXT
-            )"
+            )",
         );
 
         let mgr = Self {
@@ -164,20 +164,38 @@ impl UserManager {
     }
 
     /// Kullanıcı kayıt
-    pub fn register(&self, email: String, username: String, password: &str, role: UserRole) -> Result<User, String> {
+    pub fn register(
+        &self,
+        email: String,
+        username: String,
+        password: &str,
+        role: UserRole,
+    ) -> Result<User, String> {
         if self.email_index.contains_key(&email) {
             return Err("Email already registered".to_string());
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let salt = generate_salt();
         let password_hash = hash_password(password, &salt);
 
         let user = User {
-            id: id.clone(), email: email.clone(), username, password_hash,
-            role, permissions: vec![], created_at: now, last_login: 0, login_count: 0,
-            enabled: true, mfa_enabled: false, mfa_secret: None,
+            id: id.clone(),
+            email: email.clone(),
+            username,
+            password_hash,
+            role,
+            permissions: vec![],
+            created_at: now,
+            last_login: 0,
+            login_count: 0,
+            enabled: true,
+            mfa_enabled: false,
+            mfa_secret: None,
             metadata: std::collections::HashMap::new(),
         };
 
@@ -209,18 +227,29 @@ impl UserManager {
         }
 
         if user.mfa_enabled {
-            return AuthResult::MfaRequired { user_id: user.id.clone() };
+            return AuthResult::MfaRequired {
+                user_id: user.id.clone(),
+            };
         }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         user.last_login = now;
         user.login_count += 1;
 
         // Persist login state update
         self.persist_user(&user);
 
-        let token = format!("xira_tok_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-        AuthResult::Success { user: user.clone(), token }
+        let token = format!(
+            "xira_tok_{}",
+            uuid::Uuid::new_v4().to_string().replace("-", "")
+        );
+        AuthResult::Success {
+            user: user.clone(),
+            token,
+        }
     }
 
     pub fn get_user(&self, id: &str) -> Option<User> {
@@ -232,7 +261,9 @@ impl UserManager {
             user.enabled = false;
             self.persist_user(&user);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     pub fn update_role(&self, id: &str, role: UserRole) -> bool {
@@ -240,7 +271,9 @@ impl UserManager {
             user.role = role;
             self.persist_user(&user);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     pub fn add_permission(&self, id: &str, permission: String) -> bool {
@@ -250,37 +283,48 @@ impl UserManager {
             }
             self.persist_user(&user);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     pub fn has_permission(&self, id: &str, permission: &str) -> bool {
-        self.users.get(id)
-            .map(|u| u.permissions.contains(&permission.to_string()) || u.role == UserRole::SuperAdmin)
+        self.users
+            .get(id)
+            .map(|u| {
+                u.permissions.contains(&permission.to_string()) || u.role == UserRole::SuperAdmin
+            })
             .unwrap_or(false)
     }
 
     pub fn list_users(&self) -> Vec<serde_json::Value> {
-        self.users.iter().map(|e| {
-            let u = e.value();
-            serde_json::json!({
-                "id": u.id, "email": u.email, "username": u.username,
-                "role": format!("{:?}", u.role), "enabled": u.enabled,
-                "created_at": u.created_at, "last_login": u.last_login,
-                "login_count": u.login_count, "mfa_enabled": u.mfa_enabled,
-                "permissions": u.permissions,
+        self.users
+            .iter()
+            .map(|e| {
+                let u = e.value();
+                serde_json::json!({
+                    "id": u.id, "email": u.email, "username": u.username,
+                    "role": format!("{:?}", u.role), "enabled": u.enabled,
+                    "created_at": u.created_at, "last_login": u.last_login,
+                    "login_count": u.login_count, "mfa_enabled": u.mfa_enabled,
+                    "permissions": u.permissions,
+                })
             })
-        }).collect()
+            .collect()
     }
 
-    pub fn user_count(&self) -> usize { self.users.len() }
+    pub fn user_count(&self) -> usize {
+        self.users.len()
+    }
 }
 
 /// Hash password with Argon2id (production-grade)
 fn hash_password(password: &str, _salt: &str) -> String {
-    use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+    use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
     let salt = SaltString::generate(&mut rand::thread_rng());
     let argon2 = Argon2::default();
-    argon2.hash_password(password.as_bytes(), &salt)
+    argon2
+        .hash_password(password.as_bytes(), &salt)
         .expect("Argon2 hash failed")
         .to_string()
 }
@@ -289,12 +333,14 @@ fn hash_password(password: &str, _salt: &str) -> String {
 fn verify_password(password: &str, stored: &str) -> bool {
     if stored.starts_with("$argon2") {
         // Argon2id verification
-        use argon2::{Argon2, PasswordVerifier, PasswordHash};
+        use argon2::{Argon2, PasswordHash, PasswordVerifier};
         let parsed = match PasswordHash::new(stored) {
             Ok(h) => h,
             Err(_) => return false,
         };
-        Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok()
     } else {
         // Legacy: salt$hash format (DefaultHasher × 1000)
         if let Some(salt) = stored.split('$').next() {
@@ -323,4 +369,3 @@ fn generate_salt() -> String {
     let salt: [u8; 16] = rand::thread_rng().gen();
     salt.iter().map(|b| format!("{:02x}", b)).collect()
 }
-

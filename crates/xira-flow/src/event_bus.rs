@@ -1,7 +1,7 @@
 /// Event Bus — servisler arası pub/sub async event iletişimi
 use dashmap::DashMap;
-use tokio::sync::broadcast;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub struct EventBus {
     channels: DashMap<String, broadcast::Sender<Event>>,
@@ -32,11 +32,17 @@ impl EventBus {
     /// Event yayınla
     pub async fn publish(&self, topic: &str, source: &str, data: serde_json::Value) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let event = Event {
-            id: id.clone(), topic: topic.to_string(),
-            source: source.to_string(), data, timestamp: now,
+            id: id.clone(),
+            topic: topic.to_string(),
+            source: source.to_string(),
+            data,
+            timestamp: now,
         };
 
         // Channel'a gönder
@@ -58,7 +64,9 @@ impl EventBus {
 
     /// Topic'e subscribe ol
     pub fn subscribe(&self, topic: &str, subscriber_id: &str) -> broadcast::Receiver<Event> {
-        let sender = self.channels.entry(topic.to_string())
+        let sender = self
+            .channels
+            .entry(topic.to_string())
             .or_insert_with(|| broadcast::channel(1024).0);
         let receiver = sender.subscribe();
 
@@ -77,7 +85,8 @@ impl EventBus {
 
     /// Subscription bilgisi
     pub fn topic_subscribers(&self, topic: &str) -> Vec<String> {
-        self.subscriptions.get(topic)
+        self.subscriptions
+            .get(topic)
             .map(|s| s.value().clone())
             .unwrap_or_default()
     }

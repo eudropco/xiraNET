@@ -41,7 +41,13 @@ impl ProxyResult {
     }
 }
 
-const SKIP_HEADERS: [&str; 5] = ["host", "connection", "transfer-encoding", "keep-alive", "upgrade"];
+const SKIP_HEADERS: [&str; 5] = [
+    "host",
+    "connection",
+    "transfer-encoding",
+    "keep-alive",
+    "upgrade",
+];
 
 /// İsteği downstream servise ilet — raw bileşenler döndür
 pub async fn forward_request_raw(
@@ -58,7 +64,9 @@ pub async fn forward_request_raw(
         "HEAD" => reqwest::Method::HEAD,
         "OPTIONS" => reqwest::Method::OPTIONS,
         _ => {
-            let err_body = serde_json::to_vec(&serde_json::json!({"error": "Method not supported"})).unwrap_or_default();
+            let err_body =
+                serde_json::to_vec(&serde_json::json!({"error": "Method not supported"}))
+                    .unwrap_or_default();
             return ProxyResult {
                 status: 405,
                 headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -100,11 +108,11 @@ pub async fn forward_request_raw(
         Ok(resp) => {
             let status = resp.status().as_u16();
 
-            let headers: Vec<(String, String)> = resp.headers().iter()
+            let headers: Vec<(String, String)> = resp
+                .headers()
+                .iter()
                 .filter(|(k, _)| !SKIP_HEADERS.contains(&k.as_str()))
-                .filter_map(|(k, v)| {
-                    v.to_str().ok().map(|val| (k.to_string(), val.to_string()))
-                })
+                .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
                 .collect();
 
             match resp.bytes().await {
@@ -119,7 +127,8 @@ pub async fn forward_request_raw(
                     let err_body = serde_json::to_vec(&serde_json::json!({
                         "error": "Failed to read upstream response",
                         "detail": e.to_string()
-                    })).unwrap_or_default();
+                    }))
+                    .unwrap_or_default();
                     ProxyResult {
                         status: 502,
                         headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -134,7 +143,8 @@ pub async fn forward_request_raw(
             let err_body = serde_json::to_vec(&serde_json::json!({
                 "error": "Service unavailable",
                 "detail": e.to_string()
-            })).unwrap_or_default();
+            }))
+            .unwrap_or_default();
             ProxyResult {
                 status: 502,
                 headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -151,6 +161,7 @@ pub async fn forward_request(
     body: actix_web::web::Bytes,
     downstream_url: &str,
 ) -> HttpResponse {
-    forward_request_raw(original_req, body, downstream_url).await.into_response()
+    forward_request_raw(original_req, body, downstream_url)
+        .await
+        .into_response()
 }
-

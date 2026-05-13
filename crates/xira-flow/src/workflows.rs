@@ -33,13 +33,29 @@ pub struct WorkflowStep {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
-pub enum WorkflowStatus { Pending, Running, Completed, Failed, Cancelled }
+pub enum WorkflowStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
-pub enum StepStatus { Pending, Running, Success, Failed, Skipped }
+pub enum StepStatus {
+    Pending,
+    Running,
+    Success,
+    Failed,
+    Skipped,
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub enum FailureAction { Stop, Skip, Retry(u32) }
+pub enum FailureAction {
+    Stop,
+    Skip,
+    Retry(u32),
+}
 
 impl Default for WorkflowEngine {
     fn default() -> Self {
@@ -51,17 +67,29 @@ impl WorkflowEngine {
     pub fn new() -> Self {
         Self {
             workflows: Arc::new(RwLock::new(Vec::new())),
-            client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build().unwrap(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap(),
         }
     }
 
     /// Yeni workflow oluştur
     pub async fn create(&self, name: String, steps: Vec<WorkflowStep>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let wf = Workflow {
-            id: id.clone(), name, steps, status: WorkflowStatus::Pending,
-            current_step: 0, created_at: now, finished_at: None, error: None,
+            id: id.clone(),
+            name,
+            steps,
+            status: WorkflowStatus::Pending,
+            current_step: 0,
+            created_at: now,
+            finished_at: None,
+            error: None,
         };
         self.workflows.write().await.push(wf);
         id
@@ -70,7 +98,9 @@ impl WorkflowEngine {
     /// Workflow'u çalıştır (sequential)
     pub async fn execute(&self, workflow_id: &str) -> Result<(), String> {
         let mut workflows = self.workflows.write().await;
-        let wf = workflows.iter_mut().find(|w| w.id == workflow_id)
+        let wf = workflows
+            .iter_mut()
+            .find(|w| w.id == workflow_id)
             .ok_or("Workflow not found")?;
 
         wf.status = WorkflowStatus::Running;
@@ -86,9 +116,11 @@ impl WorkflowEngine {
             let result = match step.method.to_uppercase().as_str() {
                 "POST" => {
                     let mut req = self.client.post(&step.url);
-                    if let Some(ref body) = step.body { req = req.body(body.clone()); }
+                    if let Some(ref body) = step.body {
+                        req = req.body(body.clone());
+                    }
                     req.send().await
-                },
+                }
                 "PUT" => self.client.put(&step.url).send().await,
                 "DELETE" => self.client.delete(&step.url).send().await,
                 _ => self.client.get(&step.url).send().await,
@@ -106,20 +138,32 @@ impl WorkflowEngine {
 
                     if resp.status().is_success() {
                         wf.steps[i].status = StepStatus::Success;
-                        tracing::info!("  Step {}: {} → {} ({:.0}ms)", i + 1, step.name, resp.status(), duration);
+                        tracing::info!(
+                            "  Step {}: {} → {} ({:.0}ms)",
+                            i + 1,
+                            step.name,
+                            resp.status(),
+                            duration
+                        );
                     } else {
                         wf.steps[i].status = StepStatus::Failed;
                         match &step.on_failure {
                             FailureAction::Stop => {
                                 wf.status = WorkflowStatus::Failed;
-                                wf.error = Some(format!("Step {} failed: HTTP {}", step.name, resp.status()));
+                                wf.error = Some(format!(
+                                    "Step {} failed: HTTP {}",
+                                    step.name,
+                                    resp.status()
+                                ));
                                 return Err(wf.error.clone().unwrap());
-                            },
-                            FailureAction::Skip => { wf.steps[i].status = StepStatus::Skipped; },
-                            FailureAction::Retry(_) => { /* retry logic simplified */ },
+                            }
+                            FailureAction::Skip => {
+                                wf.steps[i].status = StepStatus::Skipped;
+                            }
+                            FailureAction::Retry(_) => { /* retry logic simplified */ }
                         }
                     }
-                },
+                }
                 Err(e) => {
                     wf.steps[i].status = StepStatus::Failed;
                     wf.steps[i].duration_ms = duration;
@@ -133,11 +177,18 @@ impl WorkflowEngine {
         let mut workflows = self.workflows.write().await;
         if let Some(wf) = workflows.iter_mut().find(|w| w.id == workflow_id) {
             wf.status = WorkflowStatus::Completed;
-            wf.finished_at = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+            wf.finished_at = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            );
         }
 
         Ok(())
     }
 
-    pub async fn list(&self) -> Vec<Workflow> { self.workflows.read().await.clone() }
+    pub async fn list(&self) -> Vec<Workflow> {
+        self.workflows.read().await.clone()
+    }
 }

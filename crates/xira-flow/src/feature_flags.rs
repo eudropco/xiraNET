@@ -26,7 +26,13 @@ pub struct TargetRule {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub enum Operator { Equals, NotEquals, Contains, StartsWith, InList }
+pub enum Operator {
+    Equals,
+    NotEquals,
+    Contains,
+    StartsWith,
+    InList,
+}
 
 impl Default for FeatureFlagManager {
     fn default() -> Self {
@@ -35,27 +41,53 @@ impl Default for FeatureFlagManager {
 }
 
 impl FeatureFlagManager {
-    pub fn new() -> Self { Self { flags: DashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            flags: DashMap::new(),
+        }
+    }
 
     /// Flag oluştur
     pub fn create(&self, name: String, description: String, enabled: bool, percentage: u32) {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        self.flags.insert(name.clone(), FeatureFlag {
-            name, enabled, description, percentage, rules: vec![],
-            created_at: now, updated_at: now, eval_count: 0, true_count: 0,
-        });
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.flags.insert(
+            name.clone(),
+            FeatureFlag {
+                name,
+                enabled,
+                description,
+                percentage,
+                rules: vec![],
+                created_at: now,
+                updated_at: now,
+                eval_count: 0,
+                true_count: 0,
+            },
+        );
     }
 
     /// Flag değerlendir
-    pub fn evaluate(&self, name: &str, context: &std::collections::HashMap<String, String>) -> bool {
+    pub fn evaluate(
+        &self,
+        name: &str,
+        context: &std::collections::HashMap<String, String>,
+    ) -> bool {
         if let Some(mut flag) = self.flags.get_mut(name) {
             flag.eval_count += 1;
 
-            if !flag.enabled { return false; }
+            if !flag.enabled {
+                return false;
+            }
 
             // Targeting rules check
             for rule in &flag.rules {
-                let attr_value = context.get(&rule.attribute).map(|s| s.as_str()).unwrap_or("");
+                let attr_value = context
+                    .get(&rule.attribute)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
                 let matches = match &rule.operator {
                     Operator::Equals => attr_value == rule.value,
                     Operator::NotEquals => attr_value != rule.value,
@@ -63,7 +95,9 @@ impl FeatureFlagManager {
                     Operator::StartsWith => attr_value.starts_with(&rule.value),
                     Operator::InList => rule.value.split(',').any(|v| v.trim() == attr_value),
                 };
-                if !matches { return false; }
+                if !matches {
+                    return false;
+                }
             }
 
             // Percentage rollout (deterministic based on context hash)
@@ -74,11 +108,16 @@ impl FeatureFlagManager {
                     // Hash sorted key-value pairs (HashMap itself doesn't implement Hash)
                     let mut entries: Vec<_> = context.iter().collect();
                     entries.sort_by_key(|(k, _)| (*k).clone());
-                    for (k, v) in &entries { k.hash(&mut h); v.hash(&mut h); }
+                    for (k, v) in &entries {
+                        k.hash(&mut h);
+                        v.hash(&mut h);
+                    }
                     name.hash(&mut h);
                     (h.finish() % 100) as u32
                 };
-                if hash >= flag.percentage { return false; }
+                if hash >= flag.percentage {
+                    return false;
+                }
             }
 
             flag.true_count += 1;
@@ -93,12 +132,17 @@ impl FeatureFlagManager {
         if let Some(mut flag) = self.flags.get_mut(flag_name) {
             flag.rules.push(rule);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     /// Toggle
     pub fn toggle(&self, name: &str) -> Option<bool> {
-        self.flags.get_mut(name).map(|mut f| { f.enabled = !f.enabled; f.enabled })
+        self.flags.get_mut(name).map(|mut f| {
+            f.enabled = !f.enabled;
+            f.enabled
+        })
     }
 
     /// Tüm flag'ları listele

@@ -47,7 +47,10 @@ impl CanaryConfig {
     }
 
     /// Header-based canary routing
-    pub fn check_header_routing(&self, headers: &actix_web::http::header::HeaderMap) -> Option<String> {
+    pub fn check_header_routing(
+        &self,
+        headers: &actix_web::http::header::HeaderMap,
+    ) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -58,7 +61,12 @@ impl CanaryConfig {
             if let Some(val) = headers.get(header_name.as_str()) {
                 if let Ok(val_str) = val.to_str() {
                     if val_str == header_value {
-                        tracing::debug!("Canary header match: {} = {} → {}", header_name, header_value, canary_upstream);
+                        tracing::debug!(
+                            "Canary header match: {} = {} → {}",
+                            header_name,
+                            header_value,
+                            canary_upstream
+                        );
                         return Some(canary_upstream.clone());
                     }
                 }

@@ -1,6 +1,6 @@
+use std::sync::Arc;
 /// Audit Log — tamper-proof access logging for compliance
 use xira_common::storage::SqliteStorage;
-use std::sync::Arc;
 
 pub struct AuditLogger {
     storage: Option<Arc<SqliteStorage>>,
@@ -42,7 +42,7 @@ impl AuditLogger {
                         body_size INTEGER,
                         response_size INTEGER,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )"
+                    )",
                 );
                 tracing::info!("Audit log table initialized");
             }
@@ -52,7 +52,9 @@ impl AuditLogger {
 
     /// Audit entry kaydet (parameterized — SQL injection safe)
     pub fn log(&self, entry: &AuditEntry) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
 
         if let Some(ref storage) = self.storage {
             let _ = storage.execute_params(
@@ -90,7 +92,9 @@ impl AuditLogger {
     /// Audit log istatistikleri
     pub fn stats(&self) -> serde_json::Value {
         if let Some(ref storage) = self.storage {
-            if let Ok(rows) = storage.query_raw("SELECT COUNT(*) as total, COUNT(DISTINCT ip) as unique_ips FROM audit_log") {
+            if let Ok(rows) = storage.query_raw(
+                "SELECT COUNT(*) as total, COUNT(DISTINCT ip) as unique_ips FROM audit_log",
+            ) {
                 if let Some(row) = rows.first() {
                     return row.clone();
                 }

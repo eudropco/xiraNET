@@ -1,6 +1,6 @@
-use rusqlite::{Connection, params};
-use std::sync::Mutex;
 use crate::models::ServiceEntry;
+use rusqlite::{params, Connection};
+use std::sync::Mutex;
 
 /// SQLite-based persistent storage for services
 pub struct SqliteStorage {
@@ -16,11 +16,13 @@ impl SqliteStorage {
 
         let conn = Connection::open(db_path)?;
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA foreign_keys=ON;
-        ")?;
+        ",
+        )?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS services (
@@ -77,7 +79,9 @@ impl SqliteStorage {
         )?;
 
         tracing::info!("SQLite storage initialized: {}", db_path);
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Servis kaydet
@@ -182,12 +186,24 @@ impl SqliteStorage {
     }
 
     /// Event kaydet
-    pub fn log_event(&self, event_type: &str, service_id: Option<&str>, service_name: Option<&str>, message: &str) -> Result<(), rusqlite::Error> {
+    pub fn log_event(
+        &self,
+        event_type: &str,
+        service_id: Option<&str>,
+        service_name: Option<&str>,
+        message: &str,
+    ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO events (event_type, service_id, service_name, message, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![event_type, service_id, service_name, message, chrono::Utc::now().to_rfc3339()],
+            params![
+                event_type,
+                service_id,
+                service_name,
+                message,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )?;
         Ok(())
     }
@@ -207,7 +223,7 @@ impl SqliteStorage {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT service_id, method, path, status, duration_ms, peer_ip, timestamp
-             FROM request_logs ORDER BY id DESC LIMIT ?1"
+             FROM request_logs ORDER BY id DESC LIMIT ?1",
         )?;
 
         let logs = stmt.query_map(params![limit as i64], |row| {
@@ -230,11 +246,14 @@ impl SqliteStorage {
     }
 
     /// Son N event'i getir
-    pub fn get_recent_events(&self, limit: usize) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+    pub fn get_recent_events(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT event_type, service_id, service_name, message, timestamp
-             FROM events ORDER BY id DESC LIMIT ?1"
+             FROM events ORDER BY id DESC LIMIT ?1",
         )?;
 
         let events = stmt.query_map(params![limit as i64], |row| {
@@ -257,17 +276,25 @@ impl SqliteStorage {
     /// İstatistik al
     pub fn get_stats(&self) -> Result<serde_json::Value, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-        let total_requests: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM request_logs", [], |row| row.get(0)
-        ).unwrap_or(0);
+        let total_requests: i64 = conn
+            .query_row("SELECT COUNT(*) FROM request_logs", [], |row| row.get(0))
+            .unwrap_or(0);
 
-        let avg_duration: f64 = conn.query_row(
-            "SELECT COALESCE(AVG(duration_ms), 0) FROM request_logs", [], |row| row.get(0)
-        ).unwrap_or(0.0);
+        let avg_duration: f64 = conn
+            .query_row(
+                "SELECT COALESCE(AVG(duration_ms), 0) FROM request_logs",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0.0);
 
-        let error_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM request_logs WHERE status >= 500", [], |row| row.get(0)
-        ).unwrap_or(0);
+        let error_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM request_logs WHERE status >= 500",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         Ok(serde_json::json!({
             "total_requests_logged": total_requests,
@@ -283,7 +310,11 @@ impl SqliteStorage {
     }
 
     /// Parameterized SQL execute (INSERT, UPDATE, DELETE — safe from injection)
-    pub fn execute_params(&self, sql: &str, params: &[&dyn rusqlite::types::ToSql]) -> Result<usize, rusqlite::Error> {
+    pub fn execute_params(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<usize, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute(sql, params)
     }
@@ -299,7 +330,9 @@ impl SqliteStorage {
             for (i, col) in columns.iter().enumerate() {
                 let val: rusqlite::Result<String> = row.get(i);
                 match val {
-                    Ok(s) => { obj.insert(col.clone(), serde_json::Value::String(s)); },
+                    Ok(s) => {
+                        obj.insert(col.clone(), serde_json::Value::String(s));
+                    }
                     Err(_) => {
                         // Try as integer
                         if let Ok(n) = row.get::<_, i64>(i) {

@@ -38,12 +38,23 @@ impl WebhookRegistry {
     }
 
     /// Webhook kaydet
-    pub fn register(&self, name: String, url: String, events: Vec<String>, secret: Option<String>) -> String {
+    pub fn register(
+        &self,
+        name: String,
+        url: String,
+        events: Vec<String>,
+        secret: Option<String>,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let config = WebhookConfig {
             id: id.clone(),
-            name, url, events, enabled: true, secret,
-            delivery_count: 0, failure_count: 0,
+            name,
+            url,
+            events,
+            enabled: true,
+            secret,
+            delivery_count: 0,
+            failure_count: 0,
         };
         self.webhooks.insert(id.clone(), config);
         id
@@ -53,8 +64,12 @@ impl WebhookRegistry {
     pub async fn fire_event(&self, event_type: &str, payload: serde_json::Value) {
         for mut entry in self.webhooks.iter_mut() {
             let webhook = entry.value_mut();
-            if !webhook.enabled { continue; }
-            if !webhook.events.contains(&event_type.to_string()) && !webhook.events.contains(&"*".to_string()) {
+            if !webhook.enabled {
+                continue;
+            }
+            if !webhook.events.contains(&event_type.to_string())
+                && !webhook.events.contains(&"*".to_string())
+            {
                 continue;
             }
 

@@ -21,7 +21,14 @@ pub struct LogEntry {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
-pub enum LogLevel { Trace, Debug, Info, Warn, Error, Fatal }
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+}
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct LogSource {
@@ -42,8 +49,17 @@ impl LogAggregator {
     }
 
     /// Log entry ekle
-    pub async fn ingest(&self, source: &str, level: LogLevel, message: String, metadata: std::collections::HashMap<String, String>) {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    pub async fn ingest(
+        &self,
+        source: &str,
+        level: LogLevel,
+        message: String,
+        metadata: std::collections::HashMap<String, String>,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let mut logs = self.logs.write().await;
         let id = logs.len();
 
@@ -54,7 +70,14 @@ impl LogAggregator {
             }
         }
 
-        logs.push(LogEntry { id, timestamp: now, source: source.to_string(), level, message, metadata });
+        logs.push(LogEntry {
+            id,
+            timestamp: now,
+            source: source.to_string(),
+            level,
+            message,
+            metadata,
+        });
 
         // Eviction
         let log_len = logs.len();
@@ -64,7 +87,10 @@ impl LogAggregator {
 
         // Source tracking
         let mut src = self.sources.entry(source.to_string()).or_insert(LogSource {
-            name: source.to_string(), url: String::new(), log_count: 0, last_received: 0,
+            name: source.to_string(),
+            url: String::new(),
+            log_count: 0,
+            last_received: 0,
         });
         src.log_count += 1;
         src.last_received = now;
@@ -86,13 +112,23 @@ impl LogAggregator {
     /// Level'a göre filtrele
     pub async fn by_level(&self, level: &LogLevel, limit: usize) -> Vec<LogEntry> {
         let logs = self.logs.read().await;
-        logs.iter().rev().filter(|l| &l.level == level).take(limit).cloned().collect()
+        logs.iter()
+            .rev()
+            .filter(|l| &l.level == level)
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     /// Source'a göre filtrele
     pub async fn by_source(&self, source: &str, limit: usize) -> Vec<LogEntry> {
         let logs = self.logs.read().await;
-        logs.iter().rev().filter(|l| l.source == source).take(limit).cloned().collect()
+        logs.iter()
+            .rev()
+            .filter(|l| l.source == source)
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     /// Son N log
@@ -106,7 +142,9 @@ impl LogAggregator {
         let logs = self.logs.read().await;
         let mut level_counts = std::collections::HashMap::new();
         for log in logs.iter() {
-            *level_counts.entry(format!("{:?}", log.level)).or_insert(0u64) += 1;
+            *level_counts
+                .entry(format!("{:?}", log.level))
+                .or_insert(0u64) += 1;
         }
         serde_json::json!({
             "total_logs": logs.len(),

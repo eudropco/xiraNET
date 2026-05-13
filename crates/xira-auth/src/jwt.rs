@@ -2,7 +2,7 @@ use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error, HttpResponse,
 };
-use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::future::{ready, Future, Ready};
 use std::pin::Pin;
@@ -95,7 +95,11 @@ where
 
         // Admin, health, metrics ve auth endpoint'lerini atla
         let path = req.path().to_string();
-        if path.starts_with("/xira") || path.starts_with("/auth") || path == "/metrics" || path == "/health" {
+        if path.starts_with("/xira")
+            || path.starts_with("/auth")
+            || path == "/metrics"
+            || path == "/health"
+        {
             let fut = self.service.call(req);
             return Box::pin(async move {
                 let res = fut.await?;
@@ -115,11 +119,10 @@ where
             Some(t) => t,
             None => {
                 return Box::pin(async move {
-                    let response = HttpResponse::Unauthorized()
-                        .json(serde_json::json!({
-                            "error": "Missing or invalid Authorization header",
-                            "hint": "Use: Authorization: Bearer <token>"
-                        }));
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Missing or invalid Authorization header",
+                        "hint": "Use: Authorization: Bearer <token>"
+                    }));
                     Ok(req.into_response(response).map_into_right_body())
                 });
             }
@@ -144,11 +147,10 @@ where
             Err(e) => {
                 tracing::warn!("JWT validation failed: {}", e);
                 Box::pin(async move {
-                    let response = HttpResponse::Unauthorized()
-                        .json(serde_json::json!({
-                            "error": "Invalid or expired token",
-                            "detail": e.to_string()
-                        }));
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Invalid or expired token",
+                        "detail": e.to_string()
+                    }));
                     Ok(req.into_response(response).map_into_right_body())
                 })
             }

@@ -9,7 +9,7 @@
     ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   
 ```
 
-**v2.1.0** — Production-grade API Gateway + Identity + Automation + Observability + Deployment + Security
+**v3.0.0** — Modular API Gateway + Identity + Automation + Observability + Deployment + Security
 
 Tüm projelerinizi tek bir merkezden yönetin. Runtime'da servis bağlayın, WAF/Bot koruması, SLA izleme, cron otomasyonu ve olay yönetimi tek yerden.
 
@@ -48,7 +48,7 @@ xira health   # Sağlık durumu
 
 ```
                     ┌─────────────────────────────────────────────────────┐
-                    │                   xiraNET v2.0.0                    │
+                    │                   xiraNET v3.0.0                    │
                     │              Central Infrastructure Hub             │
                     ├─────────────────────────────────────────────────────┤
                     │                                                     │

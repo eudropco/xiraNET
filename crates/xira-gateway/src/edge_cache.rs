@@ -45,7 +45,10 @@ impl EdgeCache {
         }
 
         if let Some(mut entry) = self.entries.get_mut(cache_key) {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
 
             // TTL expired?
             if now > entry.created_at + entry.ttl_secs {
@@ -59,7 +62,9 @@ impl EdgeCache {
             // ETag conditional check
             if let Some(client_etag) = if_none_match {
                 if client_etag == entry.etag || client_etag == format!("\"{}\"", entry.etag) {
-                    return CacheDecision::NotModified { etag: entry.etag.clone() };
+                    return CacheDecision::NotModified {
+                        etag: entry.etag.clone(),
+                    };
                 }
             }
 
@@ -70,11 +75,24 @@ impl EdgeCache {
     }
 
     /// Response'u cache'e yaz
-    pub fn store(&self, cache_key: String, body: Vec<u8>, content_type: String, status: u16, headers: Vec<(String, String)>, ttl_secs: u64) -> String {
+    pub fn store(
+        &self,
+        cache_key: String,
+        body: Vec<u8>,
+        content_type: String,
+        status: u16,
+        headers: Vec<(String, String)>,
+        ttl_secs: u64,
+    ) -> String {
         // Eviction if needed
         if self.entries.len() >= self.max_entries {
             // En eski entry'yi kaldır
-            if let Some(oldest_key) = self.entries.iter().min_by_key(|e| e.value().created_at).map(|e| e.key().clone()) {
+            if let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|e| e.value().created_at)
+                .map(|e| e.key().clone())
+            {
                 self.entries.remove(&oldest_key);
             }
         }
@@ -93,7 +111,10 @@ impl EdgeCache {
             content_type,
             status,
             headers,
-            created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             ttl_secs,
             hits: 0,
         };

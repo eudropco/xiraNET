@@ -1,6 +1,6 @@
+use std::sync::Arc;
 /// Request Replay — SQLite loglarından replay
 use xira_common::storage::SqliteStorage;
-use std::sync::Arc;
 
 pub struct RequestReplay {
     storage: Arc<SqliteStorage>,
@@ -14,8 +14,12 @@ impl RequestReplay {
     /// Log ID'ye göre request'i replay et
     pub async fn replay_by_id(&self, log_id: &str) -> Result<ReplayResult, String> {
         // SQLite'dan log'u çek
-        let logs: Vec<serde_json::Value> = self.storage.get_recent_logs(100).map_err(|e| format!("DB error: {}", e))?;
-        let log: &serde_json::Value = logs.iter()
+        let logs: Vec<serde_json::Value> = self
+            .storage
+            .get_recent_logs(100)
+            .map_err(|e| format!("DB error: {}", e))?;
+        let log: &serde_json::Value = logs
+            .iter()
             .find(|l: &&serde_json::Value| l.get("id").and_then(|v| v.as_str()) == Some(log_id))
             .ok_or("Log entry not found")?;
 

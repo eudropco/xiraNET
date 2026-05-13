@@ -92,7 +92,8 @@ impl AlertManager {
             }
         };
 
-        match self.client
+        match self
+            .client
             .post(&url)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(10))
@@ -101,7 +102,13 @@ impl AlertManager {
         {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    tracing::info!("Alert sent: {}", payload.get("event").and_then(|e| e.as_str()).unwrap_or("unknown"));
+                    tracing::info!(
+                        "Alert sent: {}",
+                        payload
+                            .get("event")
+                            .and_then(|e| e.as_str())
+                            .unwrap_or("unknown")
+                    );
                 } else {
                     tracing::warn!(
                         "Alert webhook returned status {}: {}",
