@@ -1,14 +1,14 @@
 /// v2.1.0 Admin API Handlers — all domain endpoints
-use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════════
 // IDENTITY — Typed Request DTOs
 // ═══════════════════════════════════════════════════════════════
 
-use crate::identity::users::UserManager;
-use crate::identity::sessions::SessionManager;
 use crate::config::XiraConfig;
+use crate::identity::sessions::SessionManager;
+use crate::identity::users::UserManager;
 
 #[derive(serde::Deserialize)]
 pub struct CreateUserRequest {
@@ -18,7 +18,9 @@ pub struct CreateUserRequest {
     #[serde(default = "default_role")]
     pub role: String,
 }
-fn default_role() -> String { "Viewer".to_string() }
+fn default_role() -> String {
+    "Viewer".to_string()
+}
 
 #[derive(serde::Deserialize)]
 pub struct LoginRequest {
@@ -42,7 +44,8 @@ pub async fn create_user(
 
     // Enforce registration_enabled config
     if !cfg.identity.registration_enabled {
-        return HttpResponse::Forbidden().json(serde_json::json!({"error": "Registration is disabled"}));
+        return HttpResponse::Forbidden()
+            .json(serde_json::json!({"error": "Registration is disabled"}));
     }
 
     // Enforce password_min_length
@@ -54,7 +57,8 @@ pub async fn create_user(
 
     // Validate required fields
     if body.email.is_empty() || body.username.is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({"error": "email and username are required"}));
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"error": "email and username are required"}));
     }
 
     let role = match body.role.as_str() {
@@ -62,13 +66,40 @@ pub async fn create_user(
         "Admin" => crate::identity::users::UserRole::Admin,
         "Developer" => crate::identity::users::UserRole::Developer,
         "Service" => crate::identity::users::UserRole::Service,
-        _ => crate::identity::users::UserRole::Viewer,
+        "Viewer" => crate::identity::users::UserRole::Viewer,
+        other => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Unknown role: {}", other),
+                "valid_roles": ["SuperAdmin", "Admin", "Developer", "Service", "Viewer"],
+            }));
+        }
     };
 
-    match mgr.register(body.email.clone(), body.username.clone(), &body.password, role) {
-        Ok(user) => HttpResponse::Created().json(serde_json::json!({
-            "id": user.id, "email": user.email, "username": user.username,
-        })),
+    let elevated = matches!(
+        role,
+        crate::identity::users::UserRole::SuperAdmin | crate::identity::users::UserRole::Admin
+    );
+
+    match mgr.register(
+        body.email.clone(),
+        body.username.clone(),
+        &body.password,
+        role.clone(),
+    ) {
+        Ok(user) => {
+            if elevated {
+                tracing::warn!(
+                    audit = "elevated_user_created",
+                    user_id = %user.id,
+                    email = %user.email,
+                    role = ?role,
+                    "Admin endpoint created user with elevated role"
+                );
+            }
+            HttpResponse::Created().json(serde_json::json!({
+                "id": user.id, "email": user.email, "username": user.username,
+            }))
+        }
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e})),
     }
 }
@@ -80,12 +111,20 @@ pub async fn login_user(
     body: web::Json<LoginRequest>,
 ) -> HttpResponse {
     if body.email.is_empty() || body.password.is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({"error": "email and password are required"}));
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"error": "email and password are required"}));
     }
 
-    let ip = req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-    let ua = req.headers().get("user-agent")
-        .and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+    let ip = req
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+    let ua = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
 
     match mgr.authenticate(&body.email, &body.password) {
         crate::identity::users::AuthResult::Success { user, token } => {
@@ -101,7 +140,17 @@ pub async fn login_user(
         crate::identity::users::AuthResult::AccountDisabled => {
             HttpResponse::Forbidden().json(serde_json::json!({"error": "Account disabled"}))
         }
-        _ => HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid credentials"})),
+        crate::identity::users::AuthResult::LockedOut { retry_after_secs } => {
+            HttpResponse::TooManyRequests()
+                .insert_header(("Retry-After", retry_after_secs.to_string()))
+                .json(serde_json::json!({
+                    "error": "Too many failed attempts",
+                    "retry_after_secs": retry_after_secs,
+                }))
+        }
+        crate::identity::users::AuthResult::InvalidCredentials => {
+            HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid credentials"}))
+        }
     }
 }
 
@@ -115,6 +164,172 @@ pub async fn list_sessions(sessions: web::Data<Arc<SessionManager>>) -> HttpResp
 pub async fn flush_sessions(sessions: web::Data<Arc<SessionManager>>) -> HttpResponse {
     let cleaned = sessions.cleanup_expired();
     HttpResponse::Ok().json(serde_json::json!({"cleaned": cleaned}))
+}
+
+/// GET /auth/me — geçerli session'ın user bilgisini döndür.
+/// SessionAuth middleware tarafından doğrulanmış olmalı.
+pub async fn me(
+    req: HttpRequest,
+    users: web::Data<Arc<UserManager>>,
+) -> HttpResponse {
+    let session_info = match req.extensions().get::<crate::middleware::session::SessionInfo>() {
+        Some(s) => s.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "no session"}));
+        }
+    };
+    match users.get_user(&session_info.user_id) {
+        Some(u) => HttpResponse::Ok().json(serde_json::json!({
+            "id": u.id,
+            "email": u.email,
+            "username": u.username,
+            "role": u.role,
+        })),
+        None => HttpResponse::NotFound().json(serde_json::json!({"error": "user not found"})),
+    }
+}
+
+/// POST /auth/logout — geçerli session'ı invalidate et.
+pub async fn logout(
+    req: HttpRequest,
+    sessions: web::Data<Arc<SessionManager>>,
+) -> HttpResponse {
+    let token = match req.extensions().get::<crate::middleware::session::SessionInfo>() {
+        Some(s) => s.token.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "no session"}));
+        }
+    };
+    let removed = sessions.invalidate(&token);
+    HttpResponse::Ok().json(serde_json::json!({"logged_out": removed}))
+}
+
+/// GET /auth/sessions — geçerli kullanıcının aktif session'larını listele.
+pub async fn my_sessions(
+    req: HttpRequest,
+    sessions: web::Data<Arc<SessionManager>>,
+) -> HttpResponse {
+    let user_id = match req.extensions().get::<crate::middleware::session::SessionInfo>() {
+        Some(s) => s.user_id.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "no session"}));
+        }
+    };
+    let active = sessions.user_sessions(&user_id);
+    // Plaintext token'ı dışa sızdırma — sadece metadata.
+    let safe: Vec<serde_json::Value> = active
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "device": s.device_name,
+                "ip": s.ip,
+                "user_agent": s.user_agent,
+                "created_at": s.created_at,
+                "expires_at": s.expires_at,
+                "last_activity": s.last_activity,
+            })
+        })
+        .collect();
+    HttpResponse::Ok().json(serde_json::json!({"sessions": safe, "count": safe.len()}))
+}
+
+/// POST /auth/logout-all — geçerli kullanıcının TÜM session'larını kapat.
+pub async fn logout_all(
+    req: HttpRequest,
+    sessions: web::Data<Arc<SessionManager>>,
+) -> HttpResponse {
+    let user_id = match req.extensions().get::<crate::middleware::session::SessionInfo>() {
+        Some(s) => s.user_id.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "no session"}));
+        }
+    };
+    let count = sessions.invalidate_all(&user_id);
+    HttpResponse::Ok().json(serde_json::json!({"invalidated": count}))
+}
+
+/// POST /auth/mfa/enroll — geçerli kullanıcı için MFA seed üret + QR URL döndür.
+pub async fn mfa_enroll(
+    req: HttpRequest,
+    users: web::Data<Arc<UserManager>>,
+) -> HttpResponse {
+    let user_id = match req.extensions().get::<crate::middleware::session::SessionInfo>() {
+        Some(s) => s.user_id.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "no session"}));
+        }
+    };
+    match users.start_mfa_enrollment(&user_id) {
+        Ok((secret, qr)) => HttpResponse::Ok().json(serde_json::json!({
+            "secret": secret,
+            "qr_url": qr,
+            "next": "POST /auth/mfa/verify with the 6-digit code from your authenticator"
+        })),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct MfaCodeRequest {
+    pub code: String,
+}
+
+/// POST /auth/mfa/verify — enrollment'ı doğrula, mfa_enabled = true yap.
+pub async fn mfa_verify(
+    req: HttpRequest,
+    users: web::Data<Arc<UserManager>>,
+    body: web::Json<MfaCodeRequest>,
+) -> HttpResponse {
+    let user_id = match req.extensions().get::<crate::middleware::session::SessionInfo>() {
+        Some(s) => s.user_id.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "no session"}));
+        }
+    };
+    if users.verify_mfa_setup(&user_id, &body.code) {
+        HttpResponse::Ok().json(serde_json::json!({"mfa_enabled": true}))
+    } else {
+        HttpResponse::BadRequest().json(serde_json::json!({"error": "invalid code"}))
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct MfaLoginRequest {
+    pub user_id: String,
+    pub code: String,
+}
+
+/// POST /auth/mfa/login — login yanıtında MfaRequired alındığında 2. adım.
+pub async fn mfa_login(
+    mgr: web::Data<Arc<UserManager>>,
+    sessions: web::Data<Arc<SessionManager>>,
+    req: HttpRequest,
+    body: web::Json<MfaLoginRequest>,
+) -> HttpResponse {
+    let ip = req
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+    let ua = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    match mgr.complete_mfa_login(&body.user_id, &body.code) {
+        crate::identity::users::AuthResult::Success { user, token } => {
+            let s = sessions.create(&user.id, &token, &ip, &ua, 86400);
+            HttpResponse::Ok().json(serde_json::json!({
+                "token": s.token,
+                "user_id": user.id,
+                "expires_at": s.expires_at,
+            }))
+        }
+        crate::identity::users::AuthResult::AccountDisabled => {
+            HttpResponse::Forbidden().json(serde_json::json!({"error": "Account disabled"}))
+        }
+        _ => HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid code"})),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -139,16 +354,34 @@ pub struct CreateCronJobRequest {
     #[serde(default = "default_interval")]
     pub interval_secs: u64,
 }
-fn default_unnamed() -> String { "unnamed".to_string() }
-fn default_get() -> String { "GET".to_string() }
-fn default_interval() -> u64 { 60 }
+fn default_unnamed() -> String {
+    "unnamed".to_string()
+}
+fn default_get() -> String {
+    "GET".to_string()
+}
+fn default_interval() -> u64 {
+    60
+}
 
 pub async fn create_cron_job(
     scheduler: web::Data<Arc<CronScheduler>>,
     body: web::Json<CreateCronJobRequest>,
 ) -> HttpResponse {
+    // SSRF guard — cron internal servislere de çağrı yapabilir; metadata her durumda block.
+    if let Err(e) = crate::alerting::url_guard::validate_upstream_url(&body.url).await {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"error": format!("URL rejected: {}", e)}));
+    }
     let schedule = crate::automation::cron::CronSchedule::EverySeconds(body.interval_secs);
-    let id = scheduler.add_job(body.name.clone(), schedule, body.url.clone(), body.method.clone()).await;
+    let id = scheduler
+        .add_job(
+            body.name.clone(),
+            schedule,
+            body.url.clone(),
+            body.method.clone(),
+        )
+        .await;
     HttpResponse::Created().json(serde_json::json!({"id": id}))
 }
 
@@ -163,7 +396,9 @@ pub async fn delete_cron_job(
     }
 }
 
-pub async fn list_workflows(engine: web::Data<Arc<crate::automation::workflows::WorkflowEngine>>) -> HttpResponse {
+pub async fn list_workflows(
+    engine: web::Data<Arc<crate::automation::workflows::WorkflowEngine>>,
+) -> HttpResponse {
     let wfs = engine.list().await;
     HttpResponse::Ok().json(serde_json::json!({"workflows": wfs, "total": wfs.len()}))
 }
@@ -183,14 +418,20 @@ pub struct PublishEventRequest {
     #[serde(default)]
     pub data: serde_json::Value,
 }
-fn default_topic() -> String { "default".to_string() }
-fn default_source() -> String { "api".to_string() }
+fn default_topic() -> String {
+    "default".to_string()
+}
+fn default_source() -> String {
+    "api".to_string()
+}
 
 pub async fn publish_event(
     bus: web::Data<Arc<EventBus>>,
     body: web::Json<PublishEventRequest>,
 ) -> HttpResponse {
-    let id = bus.publish(&body.topic, &body.source, body.data.clone()).await;
+    let id = bus
+        .publish(&body.topic, &body.source, body.data.clone())
+        .await;
     HttpResponse::Created().json(serde_json::json!({"event_id": id}))
 }
 
@@ -198,15 +439,18 @@ pub async fn publish_event(
 // OBSERVABILITY
 // ═══════════════════════════════════════════════════════════════
 
+use crate::observability::incidents::IncidentManager;
 use crate::observability::log_aggregator::LogAggregator;
 use crate::observability::uptime::UptimePage;
-use crate::observability::incidents::IncidentManager;
 
 pub async fn search_logs(
     agg: web::Data<Arc<LogAggregator>>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
-    let limit = query.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50);
+    let limit = query
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
 
     let logs = if let Some(q) = query.get("q") {
         agg.search(q, limit).await
@@ -250,8 +494,12 @@ pub struct CreateIncidentRequest {
     #[serde(default)]
     pub services: Vec<String>,
 }
-fn default_untitled() -> String { "Untitled".to_string() }
-fn default_minor() -> String { "Minor".to_string() }
+fn default_untitled() -> String {
+    "Untitled".to_string()
+}
+fn default_minor() -> String {
+    "Minor".to_string()
+}
 
 pub async fn create_incident(
     mgr: web::Data<Arc<IncidentManager>>,
@@ -264,7 +512,9 @@ pub async fn create_incident(
         _ => crate::observability::incidents::Severity::Minor,
     };
 
-    let id = mgr.create(body.title.clone(), severity, body.services.clone()).await;
+    let id = mgr
+        .create(body.title.clone(), severity, body.services.clone())
+        .await;
     HttpResponse::Created().json(serde_json::json!({"incident_id": id}))
 }
 
@@ -276,7 +526,9 @@ pub struct UpdateIncidentRequest {
     pub author: String,
     pub status: Option<String>,
 }
-fn default_admin() -> String { "admin".to_string() }
+fn default_admin() -> String {
+    "admin".to_string()
+}
 
 pub async fn update_incident(
     mgr: web::Data<Arc<IncidentManager>>,
@@ -296,7 +548,8 @@ pub async fn update_incident(
     }
 
     if !body.message.is_empty() {
-        mgr.add_update(&id, body.message.clone(), body.author.clone()).await;
+        mgr.add_update(&id, body.message.clone(), body.author.clone())
+            .await;
     }
 
     HttpResponse::Ok().json(serde_json::json!({"updated": true}))
@@ -347,13 +600,20 @@ pub struct CreateFlagRequest {
     #[serde(default = "default_percentage")]
     pub percentage: u32,
 }
-fn default_percentage() -> u32 { 100 }
+fn default_percentage() -> u32 {
+    100
+}
 
 pub async fn create_flag(
     mgr: web::Data<Arc<FeatureFlagManager>>,
     body: web::Json<CreateFlagRequest>,
 ) -> HttpResponse {
-    mgr.create(body.name.clone(), body.description.clone(), body.enabled, body.percentage);
+    mgr.create(
+        body.name.clone(),
+        body.description.clone(),
+        body.enabled,
+        body.percentage,
+    );
     HttpResponse::Created().json(serde_json::json!({"created": body.name}))
 }
 
@@ -380,14 +640,22 @@ pub struct CreateReleaseRequest {
     #[serde(default = "default_threshold")]
     pub error_threshold: f64,
 }
-fn default_threshold() -> f64 { 0.1 }
+fn default_threshold() -> f64 {
+    0.1
+}
 
 pub async fn create_release(
     mgr: web::Data<Arc<ReleaseManager>>,
     body: web::Json<CreateReleaseRequest>,
 ) -> HttpResponse {
     let strategy = crate::deployment::releases::ReleaseStrategy::BlueGreen;
-    let id = mgr.create(body.service.clone(), body.blue.clone(), body.green.clone(), strategy, body.error_threshold);
+    let id = mgr.create(
+        body.service.clone(),
+        body.blue.clone(),
+        body.green.clone(),
+        strategy,
+        body.error_threshold,
+    );
     HttpResponse::Created().json(serde_json::json!({"release_id": id}))
 }
 
@@ -423,7 +691,9 @@ pub async fn create_watcher(
     pipeline: web::Data<Arc<DataPipeline>>,
     body: web::Json<CreateWatcherRequest>,
 ) -> HttpResponse {
-    let id = pipeline.add_watcher(body.endpoint.clone(), body.webhook_url.clone()).await;
+    let id = pipeline
+        .add_watcher(body.endpoint.clone(), body.webhook_url.clone())
+        .await;
     HttpResponse::Created().json(serde_json::json!({"watcher_id": id}))
 }
 
@@ -436,9 +706,9 @@ pub async fn get_analytics(pipeline: web::Data<Arc<DataPipeline>>) -> HttpRespon
 // SECURITY (WAF, Bots, Audit)
 // ═══════════════════════════════════════════════════════════════
 
-use crate::middleware::waf::Waf;
-use crate::middleware::bot_detect::BotDetector;
 use crate::middleware::audit_log::AuditLogger;
+use crate::middleware::bot_detect::BotDetector;
+use crate::middleware::waf::Waf;
 
 pub async fn get_waf_stats(waf: web::Data<Arc<Waf>>) -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
@@ -456,7 +726,10 @@ pub async fn get_audit_log(
     logger: web::Data<Arc<AuditLogger>>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
-    let limit = query.get("limit").and_then(|v| v.parse().ok()).unwrap_or(100);
+    let limit = query
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
     let entries = logger.recent(limit);
     let stats = logger.stats();
     HttpResponse::Ok().json(serde_json::json!({"audit_log": entries, "stats": stats}))
@@ -466,8 +739,8 @@ pub async fn get_audit_log(
 // ADVANCED METRICS + HEALTH SCORING + SLA
 // ═══════════════════════════════════════════════════════════════
 
-use crate::metrics::advanced::AdvancedMetrics;
 use crate::gateway::health_scoring::HealthScorer;
+use crate::metrics::advanced::AdvancedMetrics;
 use crate::metrics::sla::SlaMonitor;
 
 pub async fn get_advanced_metrics(m: web::Data<Arc<AdvancedMetrics>>) -> HttpResponse {
@@ -476,6 +749,88 @@ pub async fn get_advanced_metrics(m: web::Data<Arc<AdvancedMetrics>>) -> HttpRes
 
 pub async fn get_health_scores(scoring: web::Data<Arc<HealthScorer>>) -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({"scores": scoring.all_scores()}))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// OAUTH2 GATEWAY
+// ═══════════════════════════════════════════════════════════════
+
+use crate::middleware::oauth2_gateway::{OAuth2Gateway, TokenValidation};
+
+pub async fn oauth2_status(
+    gateway: web::Data<Arc<OAuth2Gateway>>,
+) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "enabled": gateway.is_enabled(),
+        "issuer_url": gateway.issuer_url(),
+        "jwks_url": gateway.jwks_url(),
+        "cache_size": gateway.cache_size(),
+    }))
+}
+
+pub async fn oauth2_clear_cache(
+    gateway: web::Data<Arc<OAuth2Gateway>>,
+) -> HttpResponse {
+    gateway.clear_cache();
+    HttpResponse::Ok().json(serde_json::json!({"cleared": true}))
+}
+
+#[derive(serde::Deserialize)]
+pub struct IntrospectRequest {
+    pub token: String,
+}
+
+/// POST /xira/oauth2/introspect — token'ı doğrula. Cache'li.
+pub async fn oauth2_introspect(
+    gateway: web::Data<Arc<OAuth2Gateway>>,
+    body: web::Json<IntrospectRequest>,
+) -> HttpResponse {
+    match gateway.validate_token(&body.token).await {
+        TokenValidation::Valid { sub, claims } => HttpResponse::Ok().json(serde_json::json!({
+            "active": true,
+            "sub": sub,
+            "claims": claims,
+        })),
+        TokenValidation::Invalid { reason } => {
+            HttpResponse::Ok().json(serde_json::json!({"active": false, "reason": reason}))
+        }
+        TokenValidation::Error { reason } => HttpResponse::BadGateway()
+            .json(serde_json::json!({"error": "introspection failed", "reason": reason})),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SERVICE MESH
+// ═══════════════════════════════════════════════════════════════
+
+use crate::discovery::mesh::ServiceMesh;
+
+pub async fn mesh_list(
+    mesh: web::Data<Arc<ServiceMesh>>,
+) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "enabled": mesh.is_enabled(),
+        "services": mesh.list_services(),
+        "count": mesh.service_count(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct MeshRegisterRequest {
+    pub name: String,
+    pub sidecar_port: u16,
+    #[serde(default)]
+    pub mtls: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+pub async fn mesh_register(
+    mesh: web::Data<Arc<ServiceMesh>>,
+    body: web::Json<MeshRegisterRequest>,
+) -> HttpResponse {
+    mesh.register_service(body.name.clone(), body.sidecar_port, body.mtls, body.tags.clone());
+    HttpResponse::Created().json(serde_json::json!({"registered": body.name}))
 }
 
 pub async fn get_sla_report(sla: web::Data<Arc<SlaMonitor>>) -> HttpResponse {

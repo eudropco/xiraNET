@@ -41,13 +41,76 @@ impl ProxyResult {
     }
 }
 
-const SKIP_HEADERS: [&str; 5] = ["host", "connection", "transfer-encoding", "keep-alive", "upgrade"];
+const SKIP_HEADERS: [&str; 5] = [
+    "host",
+    "connection",
+    "transfer-encoding",
+    "keep-alive",
+    "upgrade",
+];
+
+pub fn build_forward_headers(original_req: &HttpRequest) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+
+    for (key, value) in original_req.headers().iter() {
+        let key_str = key.as_str().to_lowercase();
+        if !SKIP_HEADERS.contains(&key_str.as_str()) {
+            if let Ok(val_str) = value.to_str() {
+                if let (Ok(name), Ok(val)) = (
+                    reqwest::header::HeaderName::from_bytes(key.as_str().as_bytes()),
+                    reqwest::header::HeaderValue::from_str(val_str),
+                ) {
+                    headers.insert(name, val);
+                }
+            }
+        }
+    }
+
+    if let Some(peer) = original_req.peer_addr() {
+        if let Ok(val) = reqwest::header::HeaderValue::from_str(&peer.ip().to_string()) {
+            headers.insert("x-forwarded-for", val);
+        }
+    }
+    // X-Forwarded-Proto'yu connection scheme'den türet — TLS-terminated trafiği "http"
+    // diye markalama yanlış cookie/redirect davranışına yol açar.
+    let scheme = original_req.connection_info().scheme().to_string();
+    let scheme_static = if scheme == "https" { "https" } else { "http" };
+    headers.insert(
+        "x-forwarded-proto",
+        reqwest::header::HeaderValue::from_static(scheme_static),
+    );
+    if let Some(host) = original_req.headers().get("host") {
+        if let Ok(host_str) = host.to_str() {
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(host_str) {
+                headers.insert("x-forwarded-host", val);
+            }
+        }
+    }
+
+    headers
+}
 
 /// İsteği downstream servise ilet — raw bileşenler döndür
 pub async fn forward_request_raw(
     original_req: &HttpRequest,
     body: actix_web::web::Bytes,
     downstream_url: &str,
+) -> ProxyResult {
+    forward_request_raw_with_headers(
+        original_req,
+        body,
+        downstream_url,
+        build_forward_headers(original_req),
+    )
+    .await
+}
+
+/// İsteği downstream servise ilet — hazır header map ile
+pub async fn forward_request_raw_with_headers(
+    original_req: &HttpRequest,
+    body: actix_web::web::Bytes,
+    downstream_url: &str,
+    forwarded_headers: reqwest::header::HeaderMap,
 ) -> ProxyResult {
     let method = match original_req.method().as_str() {
         "GET" => reqwest::Method::GET,
@@ -58,7 +121,9 @@ pub async fn forward_request_raw(
         "HEAD" => reqwest::Method::HEAD,
         "OPTIONS" => reqwest::Method::OPTIONS,
         _ => {
-            let err_body = serde_json::to_vec(&serde_json::json!({"error": "Method not supported"})).unwrap_or_default();
+            let err_body =
+                serde_json::to_vec(&serde_json::json!({"error": "Method not supported"}))
+                    .unwrap_or_default();
             return ProxyResult {
                 status: 405,
                 headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -70,25 +135,8 @@ pub async fn forward_request_raw(
 
     let mut forwarded = HTTP_CLIENT.request(method, downstream_url);
 
-    // Header'ları ilet
-    for (key, value) in original_req.headers().iter() {
-        let key_str = key.as_str().to_lowercase();
-        if !SKIP_HEADERS.contains(&key_str.as_str()) {
-            if let Ok(val_str) = value.to_str() {
-                forwarded = forwarded.header(key.as_str(), val_str);
-            }
-        }
-    }
-
-    // X-Forwarded header'ları
-    if let Some(peer) = original_req.peer_addr() {
-        forwarded = forwarded.header("X-Forwarded-For", peer.ip().to_string());
-    }
-    forwarded = forwarded.header("X-Forwarded-Proto", "http");
-    if let Some(host) = original_req.headers().get("host") {
-        if let Ok(host_str) = host.to_str() {
-            forwarded = forwarded.header("X-Forwarded-Host", host_str);
-        }
+    for (key, value) in forwarded_headers.iter() {
+        forwarded = forwarded.header(key, value);
     }
 
     // Body
@@ -100,11 +148,11 @@ pub async fn forward_request_raw(
         Ok(resp) => {
             let status = resp.status().as_u16();
 
-            let headers: Vec<(String, String)> = resp.headers().iter()
+            let headers: Vec<(String, String)> = resp
+                .headers()
+                .iter()
                 .filter(|(k, _)| !SKIP_HEADERS.contains(&k.as_str()))
-                .filter_map(|(k, v)| {
-                    v.to_str().ok().map(|val| (k.to_string(), val.to_string()))
-                })
+                .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
                 .collect();
 
             match resp.bytes().await {
@@ -119,7 +167,8 @@ pub async fn forward_request_raw(
                     let err_body = serde_json::to_vec(&serde_json::json!({
                         "error": "Failed to read upstream response",
                         "detail": e.to_string()
-                    })).unwrap_or_default();
+                    }))
+                    .unwrap_or_default();
                     ProxyResult {
                         status: 502,
                         headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -134,7 +183,8 @@ pub async fn forward_request_raw(
             let err_body = serde_json::to_vec(&serde_json::json!({
                 "error": "Service unavailable",
                 "detail": e.to_string()
-            })).unwrap_or_default();
+            }))
+            .unwrap_or_default();
             ProxyResult {
                 status: 502,
                 headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -151,6 +201,7 @@ pub async fn forward_request(
     body: actix_web::web::Bytes,
     downstream_url: &str,
 ) -> HttpResponse {
-    forward_request_raw(original_req, body, downstream_url).await.into_response()
+    forward_request_raw(original_req, body, downstream_url)
+        .await
+        .into_response()
 }
-

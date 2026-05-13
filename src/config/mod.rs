@@ -52,6 +52,42 @@ pub struct XiraConfig {
     pub identity: IdentityConfig,
     #[serde(default)]
     pub observability: ObservabilityConfig,
+    #[serde(default)]
+    pub cors: CorsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CorsConfig {
+    /// Açıkça izin verilen origin listesi. Boş bırakılırsa origin matching devre dışı —
+    /// kayıp güvenliği için varsayılan localhost dev origin'leri.
+    #[serde(default = "default_cors_origins")]
+    pub allowed_origins: Vec<String>,
+    /// Cookie/credentials taşıma — sadece explicit origin listesiyle birlikte.
+    #[serde(default)]
+    pub allow_credentials: bool,
+    /// Cache süresi (saniye).
+    #[serde(default = "default_cors_max_age")]
+    pub max_age: usize,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: default_cors_origins(),
+            allow_credentials: false,
+            max_age: default_cors_max_age(),
+        }
+    }
+}
+
+fn default_cors_origins() -> Vec<String> {
+    vec![
+        "http://localhost".to_string(),
+        "http://127.0.0.1".to_string(),
+    ]
+}
+fn default_cors_max_age() -> usize {
+    3600
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,7 +98,9 @@ pub struct GatewayConfig {
     pub workers: usize,
 }
 
-fn default_workers() -> usize { 4 }
+fn default_workers() -> usize {
+    4
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminConfig {
@@ -95,8 +133,12 @@ pub struct MetricsConfig {
     pub path: String,
 }
 
-fn default_true() -> bool { true }
-fn default_metrics_path() -> String { "/metrics".to_string() }
+fn default_true() -> bool {
+    true
+}
+fn default_metrics_path() -> String {
+    "/metrics".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct LoggingConfig {
@@ -110,9 +152,15 @@ pub struct LoggingConfig {
     pub level: String,
 }
 
-fn default_log_path() -> String { "logs/xiranet.log".to_string() }
-fn default_log_rotation() -> String { "daily".to_string() }
-fn default_log_level() -> String { "info".to_string() }
+fn default_log_path() -> String {
+    "logs/xiranet.log".to_string()
+}
+fn default_log_rotation() -> String {
+    "daily".to_string()
+}
+fn default_log_level() -> String {
+    "info".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AlertingConfig {
@@ -139,12 +187,20 @@ pub struct RateLimitConfig {
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
-        Self { max_requests: 100, window_secs: 60, routes: std::collections::HashMap::new() }
+        Self {
+            max_requests: 100,
+            window_secs: 60,
+            routes: std::collections::HashMap::new(),
+        }
     }
 }
 
-fn default_rate_limit() -> u32 { 100 }
-fn default_rate_window() -> u64 { 60 }
+fn default_rate_limit() -> u32 {
+    100
+}
+fn default_rate_window() -> u64 {
+    60
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct CacheConfig {
@@ -156,8 +212,12 @@ pub struct CacheConfig {
     pub max_entries: usize,
 }
 
-fn default_cache_ttl() -> u64 { 300 }
-fn default_cache_capacity() -> usize { 1000 }
+fn default_cache_ttl() -> u64 {
+    300
+}
+fn default_cache_capacity() -> usize {
+    1000
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct JwtConfig {
@@ -171,12 +231,16 @@ pub struct JwtConfig {
     pub issuer: Option<String>,
 }
 
-fn default_jwt_algo() -> String { "HS256".to_string() }
+fn default_jwt_algo() -> String {
+    "HS256".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct OAuth2Config {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub issuer_url: String,
     #[serde(default)]
     pub introspection_url: Option<String>,
     #[serde(default)]
@@ -217,9 +281,15 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
-fn default_cb_threshold() -> u32 { 5 }
-fn default_cb_timeout() -> u64 { 30 }
-fn default_cb_half_open() -> u32 { 3 }
+fn default_cb_threshold() -> u32 {
+    5
+}
+fn default_cb_timeout() -> u64 {
+    30
+}
+fn default_cb_half_open() -> u32 {
+    3
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RetryConfig {
@@ -241,9 +311,15 @@ impl Default for RetryConfig {
     }
 }
 
-fn default_retry_max() -> u32 { 3 }
-fn default_retry_delay() -> u64 { 100 }
-fn default_retry_multiplier() -> f64 { 2.0 }
+fn default_retry_max() -> u32 {
+    3
+}
+fn default_retry_delay() -> u64 {
+    100
+}
+fn default_retry_multiplier() -> f64 {
+    2.0
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PluginConfig {
@@ -253,7 +329,9 @@ pub struct PluginConfig {
     pub directory: String,
 }
 
-fn default_plugin_dir() -> String { "plugins".to_string() }
+fn default_plugin_dir() -> String {
+    "plugins".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct GrpcConfig {
@@ -263,7 +341,9 @@ pub struct GrpcConfig {
     pub port: u16,
 }
 
-fn default_grpc_port() -> u16 { 9001 }
+fn default_grpc_port() -> u16 {
+    9001
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DiscoveryConfig {
@@ -280,10 +360,26 @@ pub struct DiscoveryConfig {
     pub dns_domain: Option<String>,
     #[serde(default = "default_discovery_interval")]
     pub interval_secs: u64,
+    /// Service mesh sidecar koordinasyonu (deneysel)
+    #[serde(default)]
+    pub mesh_enabled: bool,
+    /// Docker label-based discovery
+    #[serde(default)]
+    pub docker_enabled: bool,
+    #[serde(default = "default_docker_socket")]
+    pub docker_socket: String,
 }
 
-fn default_discovery_backend() -> String { "static".to_string() }
-fn default_discovery_interval() -> u64 { 30 }
+fn default_docker_socket() -> String {
+    "http://localhost:2375".to_string()
+}
+
+fn default_discovery_backend() -> String {
+    "static".to_string()
+}
+fn default_discovery_interval() -> u64 {
+    30
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct RedisConfig {
@@ -303,8 +399,12 @@ pub struct TelemetryConfig {
     pub service_name: String,
 }
 
-fn default_otel_endpoint() -> String { "http://localhost:4317".to_string() }
-fn default_service_name() -> String { "xiranet".to_string() }
+fn default_otel_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+fn default_service_name() -> String {
+    "xiranet".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WafConfig {
@@ -318,10 +418,16 @@ pub struct WafConfig {
 }
 impl Default for WafConfig {
     fn default() -> Self {
-        Self { enabled: true, mode: "block".into(), custom_block_patterns: vec![] }
+        Self {
+            enabled: true,
+            mode: "block".into(),
+            custom_block_patterns: vec![],
+        }
     }
 }
-fn default_waf_mode() -> String { "block".into() }
+fn default_waf_mode() -> String {
+    "block".into()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BotDetectionConfig {
@@ -334,10 +440,16 @@ pub struct BotDetectionConfig {
 }
 impl Default for BotDetectionConfig {
     fn default() -> Self {
-        Self { enabled: true, block_bots: false, crawl_rate_limit: 60 }
+        Self {
+            enabled: true,
+            block_bots: false,
+            crawl_rate_limit: 60,
+        }
     }
 }
-fn default_crawl_rate() -> u32 { 60 }
+fn default_crawl_rate() -> u32 {
+    60
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IdentityConfig {
@@ -350,11 +462,19 @@ pub struct IdentityConfig {
 }
 impl Default for IdentityConfig {
     fn default() -> Self {
-        Self { max_sessions_per_user: 5, password_min_length: 8, registration_enabled: true }
+        Self {
+            max_sessions_per_user: 5,
+            password_min_length: 8,
+            registration_enabled: true,
+        }
     }
 }
-fn default_max_sessions() -> usize { 5 }
-fn default_password_min() -> usize { 8 }
+fn default_max_sessions() -> usize {
+    5
+}
+fn default_password_min() -> usize {
+    8
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ObservabilityConfig {
@@ -369,13 +489,26 @@ pub struct ObservabilityConfig {
 }
 impl Default for ObservabilityConfig {
     fn default() -> Self {
-        Self { log_max_entries: 50000, uptime_history_days: 90, sla_target_uptime: 99.9, sla_target_latency_ms: 500.0 }
+        Self {
+            log_max_entries: 50000,
+            uptime_history_days: 90,
+            sla_target_uptime: 99.9,
+            sla_target_latency_ms: 500.0,
+        }
     }
 }
-fn default_log_max_entries() -> usize { 50000 }
-fn default_uptime_history() -> u32 { 90 }
-fn default_sla_target() -> f64 { 99.9 }
-fn default_sla_latency() -> f64 { 500.0 }
+fn default_log_max_entries() -> usize {
+    50000
+}
+fn default_uptime_history() -> u32 {
+    90
+}
+fn default_sla_target() -> f64 {
+    99.9
+}
+fn default_sla_latency() -> f64 {
+    500.0
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServiceConfig {
@@ -427,7 +560,11 @@ impl XiraConfig {
     }
 
     pub fn load_or_default() -> Self {
-        let paths = vec!["xiranet.toml", "config/xiranet.toml", "/etc/xiranet/xiranet.toml"];
+        let paths = vec![
+            "xiranet.toml",
+            "config/xiranet.toml",
+            "/etc/xiranet/xiranet.toml",
+        ];
         for path in paths {
             if Path::new(path).exists() {
                 match Self::load(path) {
@@ -450,9 +587,19 @@ impl XiraConfig {
 impl Default for XiraConfig {
     fn default() -> Self {
         XiraConfig {
-            gateway: GatewayConfig { host: "0.0.0.0".to_string(), port: 9000, workers: 4 },
-            admin: AdminConfig { api_key: "xira-default-key".to_string(), enabled: true },
-            health: HealthConfig { interval_secs: 30, timeout_secs: 5 },
+            gateway: GatewayConfig {
+                host: "0.0.0.0".to_string(),
+                port: 9000,
+                workers: 4,
+            },
+            admin: AdminConfig {
+                api_key: "xira-default-key".to_string(),
+                enabled: true,
+            },
+            health: HealthConfig {
+                interval_secs: 30,
+                timeout_secs: 5,
+            },
             tls: None,
             metrics: MetricsConfig::default(),
             logging: LoggingConfig::default(),
@@ -474,39 +621,43 @@ impl Default for XiraConfig {
             bot_detection: BotDetectionConfig::default(),
             identity: IdentityConfig::default(),
             observability: ObservabilityConfig::default(),
+            cors: CorsConfig::default(),
         }
     }
 }
 
 /// Config hot-reload: watches xiranet.toml and reloads on change
 pub fn start_config_watcher(config_path: String, shared: SharedConfig) {
-    use notify::{Watcher, RecursiveMode, Event, EventKind};
+    use notify::{Event, EventKind, RecursiveMode, Watcher};
 
     let rt = tokio::runtime::Handle::current();
 
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
 
-        let mut watcher = match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            if let Ok(event) = res {
-                if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                    let _ = tx.send(());
+        let mut watcher =
+            match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+                if let Ok(event) = res {
+                    if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                        let _ = tx.send(());
+                    }
                 }
-            }
-        }) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("Cannot create file watcher: {} - hot-reload disabled", e);
-                return;
-            }
-        };
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("Cannot create file watcher: {e} - hot-reload disabled");
+                    return;
+                }
+            };
 
         if let Err(e) = watcher.watch(Path::new(&config_path), RecursiveMode::NonRecursive) {
-            eprintln!("Cannot watch config file {}: {} - hot-reload disabled", config_path, e);
+            eprintln!(
+                "Cannot watch config file {config_path}: {e} - hot-reload disabled"
+            );
             return;
         }
 
-        println!("Config hot-reload enabled for: {}", config_path);
+        println!("Config hot-reload enabled for: {config_path}");
 
         while rx.recv().is_ok() {
             // Debounce
@@ -524,7 +675,7 @@ pub fn start_config_watcher(config_path: String, shared: SharedConfig) {
                     });
                 }
                 Err(e) => {
-                    eprintln!("Failed to reload config: {}", e);
+                    eprintln!("Failed to reload config: {e}");
                 }
             }
         }

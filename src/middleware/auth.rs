@@ -5,6 +5,20 @@ use actix_web::{
 use std::future::{ready, Future, Ready};
 use std::pin::Pin;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
+
+/// Constant-time string comparison — eşit uzunluklu olsalar bile timing leak'i engeller.
+/// Farklı uzunlukta da timing-safe: önce uzunluk eşitse byte-bazlı CT compare yapar,
+/// değilse sahte CT compare çalıştırıp false döndürür.
+#[inline]
+fn ct_eq_str(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        // Yine de bir CT karşılaştırma çalıştır ki erken-return timing leak'i olmasın.
+        let _ = a.as_bytes().ct_eq(a.as_bytes());
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
 
 /// API Key tabanlı authentication middleware
 pub struct ApiKeyAuth {
@@ -75,7 +89,7 @@ where
         let expected_key = self.api_key.clone();
 
         match provided_key {
-            Some(key) if key == *expected_key => {
+            Some(key) if ct_eq_str(&key, expected_key.as_str()) => {
                 let fut = self.service.call(req);
                 Box::pin(async move {
                     let res = fut.await?;
@@ -85,11 +99,10 @@ where
             _ => {
                 tracing::warn!("Unauthorized access attempt to admin API: {}", path);
                 Box::pin(async move {
-                    let response = HttpResponse::Unauthorized()
-                        .json(serde_json::json!({
-                            "error": "Unauthorized",
-                            "message": "Valid X-Api-Key header required"
-                        }));
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Unauthorized",
+                        "message": "Valid X-Api-Key header required"
+                    }));
                     Ok(req.into_response(response).map_into_right_body())
                 })
             }
