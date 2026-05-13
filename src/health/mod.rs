@@ -1,8 +1,8 @@
-use crate::registry::{models::ServiceStatus, ServiceRegistry};
 use crate::alerting::AlertManager;
-use crate::observability::uptime::{UptimePage, ServiceStatus as UptimeStatus};
-use crate::observability::incidents::{IncidentManager, Severity};
 use crate::metrics::sla::SlaMonitor;
+use crate::observability::incidents::{IncidentManager, Severity};
+use crate::observability::uptime::{ServiceStatus as UptimeStatus, UptimePage};
+use crate::registry::{models::ServiceStatus, ServiceRegistry};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
@@ -27,7 +27,8 @@ pub async fn start_health_checker(
 
     tracing::info!(
         "Health checker started (interval: {}s, timeout: {}s)",
-        interval_secs, timeout_secs
+        interval_secs,
+        timeout_secs
     );
 
     loop {
@@ -37,11 +38,6 @@ pub async fn start_health_checker(
         if services.is_empty() {
             continue;
         }
-
-        // Prometheus gauge güncelle
-        let up_count = registry.count_by_status(&ServiceStatus::Up);
-        let down_count = registry.count_by_status(&ServiceStatus::Down);
-        crate::metrics::update_service_gauges(services.len(), up_count, down_count);
 
         for service in &services {
             let health_url = format!("{}{}", service.upstream, service.health_endpoint);
@@ -67,13 +63,15 @@ pub async fn start_health_checker(
                     }
                     Err(e) => {
                         last_status = ServiceStatus::Down;
-                        last_msg = format!("{}: DOWN (error sending request for url ({}))", service.name, health_url);
-                        let _ = e;
+                        // Hata kategorisini koru — DNS vs TLS vs timeout debug için kritik
+                        last_msg = format!("{}: DOWN ({})", service.name, e);
                     }
                 }
 
                 if attempt < max_retries {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    // Jitter ile retry: aynı anda flap eden N servis aynı upstream'e thunder etmesin
+                    let jitter_ms = (rand::random::<u64>() % 500) + 250;
+                    tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
                 }
             }
 
@@ -83,7 +81,11 @@ pub async fn start_health_checker(
 
             // ═══ [UPTIME PAGE] Feed health result ═══
             {
-                let uptime_status = if is_up { UptimeStatus::Operational } else { UptimeStatus::MajorOutage };
+                let uptime_status = if is_up {
+                    UptimeStatus::Operational
+                } else {
+                    UptimeStatus::MajorOutage
+                };
                 let page = uptime_page.read().await;
                 page.update(&service.name, uptime_status, check_latency_ms);
             }
@@ -91,27 +93,45 @@ pub async fn start_health_checker(
             // ═══ [SLA MONITOR] Record health check ═══
             sla_monitor.record_check(&service.name, is_up, check_latency_ms);
 
-            // Durum değiştiyse log + alert + incident
+            // Durum değiştiyse log + alert + incident (dedup'lu)
             if service.status != new_status {
                 match new_status {
                     ServiceStatus::Up => {
                         tracing::info!("🟢 {}", log_msg);
-                        alert_manager.alert_service_up(&service.name, &service.id.to_string()).await;
+                        alert_manager
+                            .alert_service_up(&service.name, &service.id.to_string())
+                            .await;
+                        // Recovery: bu servis için açık incident'ları kapat
+                        let resolved =
+                            incident_manager.resolve_for_service(&service.name).await;
+                        if resolved > 0 {
+                            tracing::info!(
+                                "Auto-resolved {} incident(s) for {}",
+                                resolved,
+                                service.name
+                            );
+                        }
                     }
                     ServiceStatus::Down => {
                         tracing::warn!("🔴 {}", log_msg);
-                        alert_manager.alert_service_down(
-                            &service.name,
-                            &service.id.to_string(),
-                            &log_msg,
-                        ).await;
+                        alert_manager
+                            .alert_service_down(&service.name, &service.id.to_string(), &log_msg)
+                            .await;
 
-                        // ═══ [INCIDENT] Auto-create incident on service down ═══
-                        incident_manager.create(
-                            format!("Service Down: {}", service.name),
-                            Severity::Major,
-                            vec![service.name.clone()],
-                        ).await;
+                        // Dedup: aynı servis için zaten açık bir incident varsa yenisini açma
+                        if incident_manager
+                            .find_active_for_service(&service.name)
+                            .await
+                            .is_none()
+                        {
+                            incident_manager
+                                .create(
+                                    format!("Service Down: {}", service.name),
+                                    Severity::Major,
+                                    vec![service.name.clone()],
+                                )
+                                .await;
+                        }
                     }
                     ServiceStatus::Unknown => {
                         tracing::debug!("⚪ {}", log_msg);
@@ -120,16 +140,22 @@ pub async fn start_health_checker(
 
                 // Event kaydet (SQLite)
                 if let Some(storage) = registry.storage() {
-                    let _ = storage.log_event(
+                    if let Err(e) = storage.log_event(
                         &format!("health_{}", new_status.to_string().to_lowercase()),
                         Some(&service.id.to_string()),
                         Some(&service.name),
                         &log_msg,
-                    );
+                    ) {
+                        tracing::warn!(error = %e, "log_event(health) failed");
+                    }
                 }
             }
 
             registry.update_status(&service.id, new_status);
         }
+
+        let up_count = registry.count_by_status(&ServiceStatus::Up);
+        let down_count = registry.count_by_status(&ServiceStatus::Down);
+        crate::metrics::update_service_gauges(services.len(), up_count, down_count);
     }
 }

@@ -7,8 +7,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::registry::ServiceRegistry;
 use crate::registry::storage::SqliteStorage;
+use crate::registry::ServiceRegistry;
 
 /// Request/Response loglama middleware (Prometheus metrics + SQLite entegrasyonu)
 pub struct RequestLogger {
@@ -27,7 +27,9 @@ impl RequestLogger {
     }
 
     pub fn with_storage(storage: Arc<SqliteStorage>) -> Self {
-        Self { storage: Some(storage) }
+        Self {
+            storage: Some(storage),
+        }
     }
 }
 
@@ -76,7 +78,8 @@ where
         let start = Instant::now();
 
         // Registry'den service_id bul (opsiyonel)
-        let service_id = req.app_data::<actix_web::web::Data<ServiceRegistry>>()
+        let service_id = req
+            .app_data::<actix_web::web::Data<ServiceRegistry>>()
             .and_then(|reg| reg.lookup(&path))
             .map(|svc| svc.id.to_string());
 
@@ -103,17 +106,21 @@ where
             // Prometheus metrics
             crate::metrics::record_request(&method, &path, status, duration_secs);
 
-            // SQLite request log (admin/metrics/dashboard hariç)
+            // SQLite request log (admin/metrics/dashboard hariç). Yüksek frekanslı path —
+            // her hata için warn basmak gürültü yapar; counter veya rate-limited log tercih
+            // edilebilir ancak bu sürümde sessiz fail debug-level'a düşürüldü.
             if !path.starts_with("/xira") && path != "/metrics" && path != "/dashboard" {
                 if let Some(ref storage) = storage {
-                    let _ = storage.log_request(
+                    if let Err(e) = storage.log_request(
                         service_id.as_deref(),
                         &method,
                         &path,
                         status,
                         duration_ms,
                         &peer,
-                    );
+                    ) {
+                        tracing::debug!(error = %e, "request log persist failed");
+                    }
                 }
             }
 

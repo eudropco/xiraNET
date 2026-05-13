@@ -33,33 +33,69 @@ impl Default for SlaMonitor {
 
 impl SlaMonitor {
     pub fn new() -> Self {
-        Self { services: DashMap::new() }
+        Self {
+            services: DashMap::new(),
+        }
     }
 
     /// Servis için SLA hedefi belirle
     pub fn set_sla_target(&self, service_name: &str, uptime: f64, latency_ms: f64) {
-        self.services.entry(service_name.to_string()).or_insert_with(|| SlaMetrics {
-            service_name: service_name.to_string(),
-            total_checks: 0, successful_checks: 0, failed_checks: 0,
-            uptime_percent: 100.0, latency_samples: Vec::new(),
-            latency_avg: 0.0, latency_p50: 0.0, latency_p95: 0.0, latency_p99: 0.0, latency_max: 0.0,
-            sla_target_uptime: uptime, sla_target_latency_ms: latency_ms,
-            sla_violations: 0, last_check: 0,
-        }).sla_target_uptime = uptime;
+        self.services
+            .entry(service_name.to_string())
+            .or_insert_with(|| SlaMetrics {
+                service_name: service_name.to_string(),
+                total_checks: 0,
+                successful_checks: 0,
+                failed_checks: 0,
+                uptime_percent: 100.0,
+                latency_samples: Vec::new(),
+                latency_avg: 0.0,
+                latency_p50: 0.0,
+                latency_p95: 0.0,
+                latency_p99: 0.0,
+                latency_max: 0.0,
+                sla_target_uptime: uptime,
+                sla_target_latency_ms: latency_ms,
+                sla_violations: 0,
+                last_check: 0,
+            })
+            .sla_target_uptime = uptime;
     }
 
     /// Health check sonucu kaydet
     pub fn record_check(&self, service_name: &str, success: bool, latency_ms: f64) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        // NaN/inf latency'leri normalize et — sort panic'ini engelle ve metrikleri bozma
+        let latency_ms = if latency_ms.is_finite() && latency_ms >= 0.0 {
+            latency_ms
+        } else {
+            0.0
+        };
 
-        let mut entry = self.services.entry(service_name.to_string()).or_insert_with(|| SlaMetrics {
-            service_name: service_name.to_string(),
-            total_checks: 0, successful_checks: 0, failed_checks: 0,
-            uptime_percent: 100.0, latency_samples: Vec::new(),
-            latency_avg: 0.0, latency_p50: 0.0, latency_p95: 0.0, latency_p99: 0.0, latency_max: 0.0,
-            sla_target_uptime: 99.9, sla_target_latency_ms: 500.0,
-            sla_violations: 0, last_check: 0,
-        });
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let mut entry = self
+            .services
+            .entry(service_name.to_string())
+            .or_insert_with(|| SlaMetrics {
+                service_name: service_name.to_string(),
+                total_checks: 0,
+                successful_checks: 0,
+                failed_checks: 0,
+                uptime_percent: 100.0,
+                latency_samples: Vec::new(),
+                latency_avg: 0.0,
+                latency_p50: 0.0,
+                latency_p95: 0.0,
+                latency_p99: 0.0,
+                latency_max: 0.0,
+                sla_target_uptime: 99.9,
+                sla_target_latency_ms: 500.0,
+                sla_violations: 0,
+                last_check: 0,
+            });
 
         let metrics = entry.value_mut();
         metrics.total_checks += 1;
@@ -77,24 +113,30 @@ impl SlaMonitor {
 
         // Uptime recalc
         if metrics.total_checks > 0 {
-            metrics.uptime_percent = (metrics.successful_checks as f64 / metrics.total_checks as f64) * 100.0;
+            metrics.uptime_percent =
+                (metrics.successful_checks as f64 / metrics.total_checks as f64) * 100.0;
         }
 
-        // Latency percentiles
+        // Latency percentiles — NaN-safe sort + bounded index
         if !metrics.latency_samples.is_empty() {
             let mut sorted = metrics.latency_samples.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // partial_cmp().unwrap() yerine total_cmp ile NaN-safe sort
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let len = sorted.len();
+            let pct_index = |p: f64| -> usize {
+                let raw = (len as f64 * p) as usize;
+                raw.min(len.saturating_sub(1))
+            };
             metrics.latency_avg = sorted.iter().sum::<f64>() / len as f64;
-            metrics.latency_p50 = sorted[len / 2];
-            metrics.latency_p95 = sorted[(len as f64 * 0.95) as usize];
-            metrics.latency_p99 = sorted[(len as f64 * 0.99) as usize];
+            metrics.latency_p50 = sorted[pct_index(0.50)];
+            metrics.latency_p95 = sorted[pct_index(0.95)];
+            metrics.latency_p99 = sorted[pct_index(0.99)];
             metrics.latency_max = sorted[len - 1];
         }
 
-        // SLA violation check
-        if metrics.uptime_percent < metrics.sla_target_uptime || (latency_ms > metrics.sla_target_latency_ms && success) {
-            metrics.sla_violations += 1;
+        // SLA violation: failed check VEYA başarılı ama latency target üstü.
+        if !(success && latency_ms <= metrics.sla_target_latency_ms) {
+            metrics.sla_violations = metrics.sla_violations.saturating_add(1);
         }
     }
 
@@ -114,10 +156,22 @@ impl SlaMonitor {
         for entry in self.services.iter() {
             let m = entry.value();
             if m.uptime_percent < m.sla_target_uptime {
-                violations.push((m.service_name.clone(), format!("Uptime {:.2}% < target {:.1}%", m.uptime_percent, m.sla_target_uptime)));
+                violations.push((
+                    m.service_name.clone(),
+                    format!(
+                        "Uptime {:.2}% < target {:.1}%",
+                        m.uptime_percent, m.sla_target_uptime
+                    ),
+                ));
             }
             if m.latency_p99 > m.sla_target_latency_ms {
-                violations.push((m.service_name.clone(), format!("P99 {:.1}ms > target {:.0}ms", m.latency_p99, m.sla_target_latency_ms)));
+                violations.push((
+                    m.service_name.clone(),
+                    format!(
+                        "P99 {:.1}ms > target {:.0}ms",
+                        m.latency_p99, m.sla_target_latency_ms
+                    ),
+                ));
             }
         }
         violations

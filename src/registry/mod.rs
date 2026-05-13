@@ -4,8 +4,8 @@ pub mod storage;
 use crate::config::ServiceConfig;
 use dashmap::DashMap;
 use models::{ServiceEntry, ServiceStatus};
-use storage::SqliteStorage;
 use std::sync::Arc;
+use storage::SqliteStorage;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -38,7 +38,11 @@ impl ServiceRegistry {
         match storage.load_all_services() {
             Ok(entries) => {
                 for entry in entries {
-                    tracing::info!("Loaded service from DB: {} → {}", entry.name, entry.upstream);
+                    tracing::info!(
+                        "Loaded service from DB: {} → {}",
+                        entry.name,
+                        entry.upstream
+                    );
                     registry.services.insert(entry.id, entry);
                 }
             }
@@ -79,7 +83,9 @@ impl ServiceRegistry {
 
             tracing::info!(
                 "Service registered from config: {} → {} (prefix: {})",
-                entry.name, entry.upstream, entry.prefix
+                entry.name,
+                entry.upstream,
+                entry.prefix
             );
 
             // SQLite'a kaydet
@@ -92,12 +98,24 @@ impl ServiceRegistry {
     }
 
     /// Yeni servis kaydet
-    pub fn register(&self, name: String, prefix: String, upstream: String, health_endpoint: String) -> ServiceEntry {
+    pub fn register(
+        &self,
+        name: String,
+        prefix: String,
+        upstream: String,
+        health_endpoint: String,
+    ) -> ServiceEntry {
         if let Some(existing) = self.find_by_prefix(&prefix) {
-            tracing::warn!("Prefix '{}' already registered by '{}', replacing", prefix, existing.name);
+            tracing::warn!(
+                "Prefix '{}' already registered by '{}', replacing",
+                prefix,
+                existing.name
+            );
             self.services.remove(&existing.id);
             if let Some(ref storage) = self.storage {
-                let _ = storage.remove_service(&existing.id.to_string());
+                if let Err(e) = storage.remove_service(&existing.id.to_string()) {
+                    tracing::warn!(error = %e, "remove_service (basic) failed");
+                }
             }
         }
 
@@ -106,8 +124,17 @@ impl ServiceRegistry {
 
         // SQLite'a kaydet
         if let Some(ref storage) = self.storage {
-            let _ = storage.save_service(&entry);
-            let _ = storage.log_event("service_registered", Some(&entry.id.to_string()), Some(&entry.name), &format!("Service '{}' registered", entry.name));
+            if let Err(e) = storage.save_service(&entry) {
+                tracing::warn!(error = %e, service = %entry.name, "save_service failed");
+            }
+            if let Err(e) = storage.log_event(
+                "service_registered",
+                Some(&entry.id.to_string()),
+                Some(&entry.name),
+                &format!("Service '{}' registered", entry.name),
+            ) {
+                tracing::warn!(error = %e, "log_event(service_registered) failed");
+            }
         }
 
         self.services.insert(entry.id, entry);
@@ -120,7 +147,9 @@ impl ServiceRegistry {
         if let Some(existing) = self.find_by_prefix(&req.prefix) {
             self.services.remove(&existing.id);
             if let Some(ref storage) = self.storage {
-                let _ = storage.remove_service(&existing.id.to_string());
+                if let Err(e) = storage.remove_service(&existing.id.to_string()) {
+                    tracing::warn!(error = %e, "remove_service (replace) failed");
+                }
             }
         }
 
@@ -136,8 +165,17 @@ impl ServiceRegistry {
         let result = entry.clone();
 
         if let Some(ref storage) = self.storage {
-            let _ = storage.save_service(&entry);
-            let _ = storage.log_event("service_registered", Some(&entry.id.to_string()), Some(&entry.name), &format!("Service '{}' registered", entry.name));
+            if let Err(e) = storage.save_service(&entry) {
+                tracing::warn!(error = %e, service = %entry.name, "save_service (advanced) failed");
+            }
+            if let Err(e) = storage.log_event(
+                "service_registered",
+                Some(&entry.id.to_string()),
+                Some(&entry.name),
+                &format!("Service '{}' registered", entry.name),
+            ) {
+                tracing::warn!(error = %e, "log_event(advanced) failed");
+            }
         }
 
         self.services.insert(entry.id, entry);
@@ -150,8 +188,17 @@ impl ServiceRegistry {
         let removed = self.services.remove(id).map(|(_, v)| v);
         if let Some(ref entry) = removed {
             if let Some(ref storage) = self.storage {
-                let _ = storage.remove_service(&entry.id.to_string());
-                let _ = storage.log_event("service_unregistered", Some(&entry.id.to_string()), Some(&entry.name), &format!("Service '{}' unregistered", entry.name));
+                if let Err(e) = storage.remove_service(&entry.id.to_string()) {
+                    tracing::warn!(error = %e, "remove_service (unregister) failed");
+                }
+                if let Err(e) = storage.log_event(
+                    "service_unregistered",
+                    Some(&entry.id.to_string()),
+                    Some(&entry.name),
+                    &format!("Service '{}' unregistered", entry.name),
+                ) {
+                    tracing::warn!(error = %e, "log_event(unregister) failed");
+                }
             }
             tracing::info!("Service unregistered: {} ({})", entry.name, entry.id);
         }
@@ -165,11 +212,12 @@ impl ServiceRegistry {
 
         for entry in self.services.iter() {
             let prefix = &entry.prefix;
-            if (path == prefix || path.starts_with(&format!("{}/", prefix)))
-                && prefix.len() > best_len {
-                    best_len = prefix.len();
-                    best_match = Some(entry.value().clone());
-                }
+            if (path == prefix || path.starts_with(&format!("{prefix}/")))
+                && prefix.len() > best_len
+            {
+                best_len = prefix.len();
+                best_match = Some(entry.value().clone());
+            }
         }
 
         best_match
@@ -177,7 +225,10 @@ impl ServiceRegistry {
 
     /// Tüm servisleri listele
     pub fn list_all(&self) -> Vec<ServiceEntry> {
-        self.services.iter().map(|entry| entry.value().clone()).collect()
+        self.services
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     /// Prefix'e göre servis bul
@@ -202,6 +253,17 @@ impl ServiceRegistry {
         }
     }
 
+    /// Servisin upstream listesini güncelle (multi-instance discovery için).
+    /// `upstreams` ana `upstream` URL'sine ek alternatifler içerir.
+    pub fn set_upstreams(&self, id: &Uuid, upstreams: Vec<String>) -> bool {
+        if let Some(mut entry) = self.services.get_mut(id) {
+            entry.upstreams = upstreams;
+            true
+        } else {
+            false
+        }
+    }
+
     /// İstek sayacını artır
     pub fn increment_request_count(&self, id: &Uuid) {
         if let Some(mut entry) = self.services.get_mut(id) {
@@ -209,7 +271,8 @@ impl ServiceRegistry {
             // Her 100 istekte bir SQLite'a yaz
             if entry.request_count % 100 == 0 {
                 if let Some(ref storage) = self.storage {
-                    let _ = storage.update_request_count(&entry.id.to_string(), entry.request_count);
+                    let _ =
+                        storage.update_request_count(&entry.id.to_string(), entry.request_count);
                 }
             }
         }

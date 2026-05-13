@@ -42,7 +42,7 @@ impl AuditLogger {
                         body_size INTEGER,
                         response_size INTEGER,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )"
+                    )",
                 );
                 tracing::info!("Audit log table initialized");
             }
@@ -52,10 +52,12 @@ impl AuditLogger {
 
     /// Audit entry kaydet (parameterized — SQL injection safe)
     pub fn log(&self, entry: &AuditEntry) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
 
         if let Some(ref storage) = self.storage {
-            let _ = storage.execute_params(
+            if let Err(e) = storage.execute_params(
                 "INSERT INTO audit_log (timestamp, ip, method, path, status, user_agent, api_key_preview, request_id, duration_ms, body_size, response_size) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 &[
                     &entry.timestamp as &dyn rusqlite::types::ToSql,
@@ -70,17 +72,21 @@ impl AuditLogger {
                     &(entry.body_size as i64),
                     &(entry.response_size as i64),
                 ],
-            );
+            ) {
+                tracing::warn!(error = %e, "audit_log persist failed");
+            }
         }
     }
 
-    /// Son N audit entry'yi getir (parameterized limit)
+    /// Son N audit entry'yi getir (parameterized limit — SQL injection safe)
     pub fn recent(&self, limit: usize) -> Vec<serde_json::Value> {
         if let Some(ref storage) = self.storage {
-            if let Ok(rows) = storage.query_raw(&format!(
-                "SELECT timestamp, ip, method, path, status, user_agent, request_id, duration_ms FROM audit_log ORDER BY id DESC LIMIT {}",
-                limit as i64
-            )) {
+            // Defansif clamp: tek query'de aşırı sayfa yüklemeyi engelle
+            let bounded = (limit as i64).clamp(1, 10_000);
+            if let Ok(rows) = storage.query_params(
+                "SELECT timestamp, ip, method, path, status, user_agent, request_id, duration_ms FROM audit_log ORDER BY id DESC LIMIT ?1",
+                &[&bounded as &dyn rusqlite::types::ToSql],
+            ) {
                 return rows;
             }
         }
@@ -90,7 +96,9 @@ impl AuditLogger {
     /// Audit log istatistikleri
     pub fn stats(&self) -> serde_json::Value {
         if let Some(ref storage) = self.storage {
-            if let Ok(rows) = storage.query_raw("SELECT COUNT(*) as total, COUNT(DISTINCT ip) as unique_ips FROM audit_log") {
+            if let Ok(rows) = storage.query_raw(
+                "SELECT COUNT(*) as total, COUNT(DISTINCT ip) as unique_ips FROM audit_log",
+            ) {
                 if let Some(row) = rows.first() {
                     return row.clone();
                 }

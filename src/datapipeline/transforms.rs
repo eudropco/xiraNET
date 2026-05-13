@@ -23,11 +23,19 @@ pub enum TransformAction {
     /// Field'ı yeniden adlandır
     RenameField { from: String, to: String },
     /// Değeri dönüştür (uppercase, lowercase, trim)
-    TransformValue { field: String, transform: ValueTransform },
+    TransformValue {
+        field: String,
+        transform: ValueTransform,
+    },
 }
 
 #[derive(Clone, Debug)]
-pub enum ValueTransform { Uppercase, Lowercase, Trim, Hash }
+pub enum ValueTransform {
+    Uppercase,
+    Lowercase,
+    Trim,
+    Hash,
+}
 
 impl Default for TransformEngine {
     fn default() -> Self {
@@ -36,7 +44,9 @@ impl Default for TransformEngine {
 }
 
 impl TransformEngine {
-    pub fn new() -> Self { Self { rules: Vec::new() } }
+    pub fn new() -> Self {
+        Self { rules: Vec::new() }
+    }
 
     pub fn add_rule(&mut self, rule: TransformRule) {
         self.rules.push(rule);
@@ -45,38 +55,49 @@ impl TransformEngine {
     /// JSON body'ye transformları uygula
     pub fn apply(&self, path: &str, body: &mut Value) {
         for rule in &self.rules {
-            if !path.starts_with(&rule.path_match) { continue; }
+            if !path_matches(path, &rule.path_match) {
+                continue;
+            }
 
             match &rule.action {
-                TransformAction::MaskField { field, visible_chars } => {
+                TransformAction::MaskField {
+                    field,
+                    visible_chars,
+                } => {
                     if let Some(val) = body.pointer_mut(&format!("/{}", field.replace('.', "/"))) {
                         if let Some(s) = val.as_str() {
-                            let masked = if s.len() > *visible_chars {
-                                format!("{}{}",
-                                    "*".repeat(s.len() - visible_chars),
-                                    &s[s.len() - visible_chars..])
-                            } else { "*".repeat(s.len()) };
+                            // UTF-8 boyunca char-bazlı maskele; multibyte char ortasında byte slice panic'ini engelle
+                            let chars: Vec<char> = s.chars().collect();
+                            let total = chars.len();
+                            let visible = (*visible_chars).min(total);
+                            let masked: String = if total > visible {
+                                let stars: String = "*".repeat(total - visible);
+                                let tail: String = chars[total - visible..].iter().collect();
+                                format!("{stars}{tail}")
+                            } else {
+                                "*".repeat(total)
+                            };
                             *val = Value::String(masked);
                         }
                     }
-                },
+                }
                 TransformAction::RemoveField { field } => {
                     if let Some(obj) = body.as_object_mut() {
                         obj.remove(field);
                     }
-                },
+                }
                 TransformAction::AddField { field, value } => {
                     if let Some(obj) = body.as_object_mut() {
                         obj.insert(field.clone(), Value::String(value.clone()));
                     }
-                },
+                }
                 TransformAction::RenameField { from, to } => {
                     if let Some(obj) = body.as_object_mut() {
                         if let Some(val) = obj.remove(from) {
                             obj.insert(to.clone(), val);
                         }
                     }
-                },
+                }
                 TransformAction::TransformValue { field, transform } => {
                     if let Some(val) = body.pointer_mut(&format!("/{}", field.replace('.', "/"))) {
                         if let Some(s) = val.as_str() {
@@ -85,19 +106,36 @@ impl TransformEngine {
                                 ValueTransform::Lowercase => s.to_lowercase(),
                                 ValueTransform::Trim => s.trim().to_string(),
                                 ValueTransform::Hash => {
-                                    use std::hash::{Hash, Hasher};
-                                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                                    s.hash(&mut h);
-                                    format!("{:x}", h.finish())
-                                },
+                                    // SHA-256 — non-cryptographic DefaultHasher yerine.
+                                    use sha2::{Digest, Sha256};
+                                    let digest = Sha256::digest(s.as_bytes());
+                                    format!("{digest:x}")
+                                }
                             };
                             *val = Value::String(transformed);
                         }
                     }
-                },
+                }
             }
         }
     }
 
-    pub fn rule_count(&self) -> usize { self.rules.len() }
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+}
+
+/// Path matching: prefix kontrolü ama "/users" kuralının "/users-admin"'i de yakalamasını
+/// engellemek için segment ayracı (sonu "/" veya tam eşit).
+fn path_matches(path: &str, pattern: &str) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+    if path == pattern {
+        return true;
+    }
+    if let Some(rest) = path.strip_prefix(pattern) {
+        return rest.starts_with('/');
+    }
+    false
 }

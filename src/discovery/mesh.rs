@@ -63,7 +63,10 @@ impl ServiceMesh {
 
     /// Tüm mesh servisleri
     pub fn list_services(&self) -> Vec<MeshService> {
-        self.mesh_services.iter().map(|e| e.value().clone()).collect()
+        self.mesh_services
+            .iter()
+            .map(|e| e.value().clone())
+            .collect()
     }
 
     /// Mesh'ten kaldır
@@ -96,33 +99,44 @@ impl DockerDiscovery {
 
     /// Docker API'den container listesi al ve label'ları parse et
     pub async fn discover(&self) -> Vec<DiscoveredService> {
-        let url = format!("{}/containers/json?filters={{\"status\":[\"running\"]}}", self.docker_socket);
+        let url = format!(
+            "{}/containers/json?filters={{\"status\":[\"running\"]}}",
+            self.docker_socket
+        );
 
         let client = reqwest::Client::new();
         match client.get(&url).send().await {
             Ok(resp) => {
                 if let Ok(containers) = resp.json::<Vec<serde_json::Value>>().await {
-                    return containers.iter().filter_map(|c| {
-                        let labels = c.get("Labels")?.as_object()?;
-                        let name = labels.get("xiranet.service.name")?.as_str()?;
-                        let prefix = labels.get("xiranet.service.prefix")?.as_str()?;
-                        let port = labels.get("xiranet.service.port")?.as_str()?.parse::<u16>().ok()?;
+                    return containers
+                        .iter()
+                        .filter_map(|c| {
+                            let labels = c.get("Labels")?.as_object()?;
+                            let name = labels.get("xiranet.service.name")?.as_str()?;
+                            let prefix = labels.get("xiranet.service.prefix")?.as_str()?;
+                            let port = labels
+                                .get("xiranet.service.port")?
+                                .as_str()?
+                                .parse::<u16>()
+                                .ok()?;
 
-                        // Container IP'sini al
-                        let networks = c.get("NetworkSettings")?.get("Networks")?.as_object()?;
-                        let ip = networks.values().next()?
-                            .get("IPAddress")?.as_str()?;
+                            // Container IP'sini al
+                            let networks =
+                                c.get("NetworkSettings")?.get("Networks")?.as_object()?;
+                            let ip = networks.values().next()?.get("IPAddress")?.as_str()?;
 
-                        Some(DiscoveredService {
-                            name: name.to_string(),
-                            prefix: prefix.to_string(),
-                            upstream: format!("http://{}:{}", ip, port),
-                            health_endpoint: labels.get("xiranet.service.health")
-                                .and_then(|h| h.as_str())
-                                .unwrap_or("/health")
-                                .to_string(),
+                            Some(DiscoveredService {
+                                name: name.to_string(),
+                                prefix: prefix.to_string(),
+                                upstream: format!("http://{ip}:{port}"),
+                                health_endpoint: labels
+                                    .get("xiranet.service.health")
+                                    .and_then(|h| h.as_str())
+                                    .unwrap_or("/health")
+                                    .to_string(),
+                            })
                         })
-                    }).collect();
+                        .collect();
                 }
                 vec![]
             }

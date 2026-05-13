@@ -1,9 +1,9 @@
 pub mod lua_engine;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;
-use dashmap::DashMap;
 
 /// Plugin trait — tüm XIRA pluginleri bunu implement eder
 #[async_trait]
@@ -23,11 +23,7 @@ pub trait XiraPlugin: Send + Sync {
     ) -> PluginAction;
 
     /// Response döndüğünde çalışır (after proxy)
-    async fn on_response(
-        &self,
-        status: u16,
-        path: &str,
-    ) -> PluginAction;
+    async fn on_response(&self, status: u16, path: &str) -> PluginAction;
 
     /// Plugin kapatıldığında çalışır
     async fn on_shutdown(&self);
@@ -44,10 +40,13 @@ pub enum PluginAction {
     AddHeader(String, String),
 }
 
-/// Plugin manager — pluginleri yükler ve çalıştırır
+/// Plugin manager — pluginleri yükler ve çalıştırır.
+/// `loaded_libs`: dlopen handle'ları process ömrü boyunca canlı tutulur,
+/// aksi halde plugin fonksiyonları invalidate olur (use-after-dlclose).
 #[derive(Clone)]
 pub struct PluginManager {
     plugins: Arc<DashMap<String, Arc<dyn XiraPlugin>>>,
+    loaded_libs: Arc<std::sync::Mutex<Vec<libloading::Library>>>,
     enabled: bool,
 }
 
@@ -55,6 +54,7 @@ impl PluginManager {
     pub fn new(enabled: bool) -> Self {
         Self {
             plugins: Arc::new(DashMap::new()),
+            loaded_libs: Arc::new(std::sync::Mutex::new(Vec::new())),
             enabled,
         }
     }
@@ -77,8 +77,21 @@ impl PluginManager {
         }
     }
 
-    /// Plugin dizininden dynamic pluginleri yükle
-    pub fn scan_directory(&self, dir: &str) {
+    /// Plugin dizininden dynamic pluginleri yükle.
+    ///
+    /// Beklenen ABI: shared library `extern "Rust" fn xira_plugin_create() -> Box<dyn XiraPlugin>`
+    /// fonksiyonunu export etmeli. Rust ABI kullanılır (C ABI fat-pointer dönmüyor) —
+    /// dolayısıyla plugin xira ile **aynı rustc sürümünde** derlenmeli; toolchain
+    /// uyumsuzluğu UB üretir. Library handle `loaded_libs` içinde tutulur — drop
+    /// edilirse plugin'in fonksiyon pointer'ları invalidate olur (use-after-dlclose).
+    ///
+    /// ```ignore
+    /// #[no_mangle]
+    /// pub fn xira_plugin_create() -> Box<dyn xiranet::plugins::XiraPlugin> {
+    ///     Box::new(MyPlugin::default())
+    /// }
+    /// ```
+    pub async fn scan_directory(&self, dir: &str) {
         if !self.enabled {
             return;
         }
@@ -91,15 +104,54 @@ impl PluginManager {
 
         tracing::info!("Scanning plugin directory: {}", dir);
 
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().map(|e| e == "so" || e == "dylib" || e == "dll").unwrap_or(false) {
-                    tracing::info!("Found plugin library: {:?}", path);
-                    // Dynamic loading ile plugin yükleme
-                    // libloading kullanılarak yapılabilir
-                }
+        let entries = match std::fs::read_dir(path) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, dir = %dir, "plugin directory read failed");
+                return;
             }
+        };
+
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let ext_ok = p
+                .extension()
+                .map(|e| e == "so" || e == "dylib" || e == "dll")
+                .unwrap_or(false);
+            if !ext_ok {
+                continue;
+            }
+            tracing::info!("Loading plugin library: {:?}", p);
+            match unsafe { self.load_native_plugin(&p).await } {
+                Ok(name) => tracing::info!("Native plugin loaded: {} ({:?})", name, p),
+                Err(e) => tracing::warn!(error = %e, path = ?p, "native plugin load failed"),
+            }
+        }
+    }
+
+    /// SAFETY: Plugin xira ile aynı toolchain'de derlenmiş olmalı. Rust ABI stable
+    /// değildir; uyumsuzluk UB üretir. Library handle `loaded_libs` içinde tutulur —
+    /// drop = use-after-dlclose. `xira_plugin_create` `Box<dyn XiraPlugin>` döndürür.
+    async unsafe fn load_native_plugin(
+        &self,
+        lib_path: &Path,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        type PluginCreate = unsafe fn() -> Box<dyn XiraPlugin>;
+
+        let lib = libloading::Library::new(lib_path)?;
+        let create_fn: libloading::Symbol<PluginCreate> = lib.get(b"xira_plugin_create")?;
+        let plugin: Box<dyn XiraPlugin> = create_fn();
+        let arc: Arc<dyn XiraPlugin> = Arc::from(plugin);
+        let name = arc.name().to_string();
+        if let Ok(mut guard) = self.loaded_libs.lock() {
+            guard.push(lib);
+        }
+        match arc.on_init().await {
+            Ok(()) => {
+                self.plugins.insert(name.clone(), arc);
+                Ok(name)
+            }
+            Err(e) => Err(format!("plugin init failed: {e}").into()),
         }
     }
 
@@ -156,13 +208,20 @@ pub struct LoggingPlugin;
 
 #[async_trait]
 impl XiraPlugin for LoggingPlugin {
-    fn name(&self) -> &str { "builtin:logging" }
+    fn name(&self) -> &str {
+        "builtin:logging"
+    }
 
     async fn on_init(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
-    async fn on_request(&self, method: &str, path: &str, _headers: &std::collections::HashMap<String, String>) -> PluginAction {
+    async fn on_request(
+        &self,
+        method: &str,
+        path: &str,
+        _headers: &std::collections::HashMap<String, String>,
+    ) -> PluginAction {
         tracing::debug!("[plugin:logging] {} {}", method, path);
         PluginAction::Continue
     }
@@ -182,13 +241,20 @@ pub struct SecurityHeadersPlugin;
 
 #[async_trait]
 impl XiraPlugin for SecurityHeadersPlugin {
-    fn name(&self) -> &str { "builtin:security-headers" }
+    fn name(&self) -> &str {
+        "builtin:security-headers"
+    }
 
     async fn on_init(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
-    async fn on_request(&self, _method: &str, _path: &str, _headers: &std::collections::HashMap<String, String>) -> PluginAction {
+    async fn on_request(
+        &self,
+        _method: &str,
+        _path: &str,
+        _headers: &std::collections::HashMap<String, String>,
+    ) -> PluginAction {
         PluginAction::Continue
     }
 

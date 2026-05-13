@@ -40,7 +40,10 @@ impl DataPipeline {
             analytics_buffer: Arc::new(RwLock::new(Vec::new())),
             buffer_size,
             sink_url,
-            client: reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build().unwrap(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap(),
         }
     }
 
@@ -48,43 +51,100 @@ impl DataPipeline {
     pub async fn add_watcher(&self, endpoint: String, webhook_url: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.cdc_watchers.write().await.push(CdcWatcher {
-            id: id.clone(), endpoint, webhook_url,
-            last_response_hash: String::new(), change_count: 0, enabled: true,
+            id: id.clone(),
+            endpoint,
+            webhook_url,
+            last_response_hash: String::new(),
+            change_count: 0,
+            enabled: true,
         });
         id
     }
 
-    /// CDC check — response'u karşılaştır, değişmişse webhook'la
+    /// CDC check — three-phase lock disiplini: snapshot → drop lock → I/O →
+    /// reacquire & merge. Bir slow upstream tüm CDC pipeline'ını veya admin
+    /// `list_watchers` read'ini kilitlemez. (Eski versiyon RwLock write guard'ı
+    /// HTTP round-trip + webhook POST boyunca tutuyordu — admin UI takılıyordu.)
     pub async fn check_changes(&self) {
-        let mut watchers = self.cdc_watchers.write().await;
-        for watcher in watchers.iter_mut() {
-            if !watcher.enabled { continue; }
+        // 1) Snapshot
+        let snapshot: Vec<(String, String, String, String)> = {
+            let watchers = self.cdc_watchers.read().await;
+            watchers
+                .iter()
+                .filter(|w| w.enabled)
+                .map(|w| {
+                    (
+                        w.id.clone(),
+                        w.endpoint.clone(),
+                        w.webhook_url.clone(),
+                        w.last_response_hash.clone(),
+                    )
+                })
+                .collect()
+        };
 
-            if let Ok(resp) = self.client.get(&watcher.endpoint).send().await {
-                if let Ok(body) = resp.text().await {
-                    let hash = {
-                        use std::hash::{Hash, Hasher};
-                        let mut h = std::collections::hash_map::DefaultHasher::new();
-                        body.hash(&mut h);
-                        format!("{:x}", h.finish())
-                    };
-
-                    if !watcher.last_response_hash.is_empty() && hash != watcher.last_response_hash {
-                        watcher.change_count += 1;
-                        tracing::info!("CDC change detected: {} (change #{})", watcher.endpoint, watcher.change_count);
-
-                        // Webhook bildir
-                        let _ = self.client.post(&watcher.webhook_url)
-                            .json(&serde_json::json!({
-                                "event": "data_changed",
-                                "endpoint": watcher.endpoint,
-                                "change_number": watcher.change_count,
-                                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                            }))
-                            .send().await;
+        // 2) I/O — paralel HTTP, lock yok
+        let mut handles = Vec::with_capacity(snapshot.len());
+        for (id, endpoint, webhook, last_hash) in snapshot {
+            let client = self.client.clone();
+            handles.push(tokio::spawn(async move {
+                let body = match client.get(&endpoint).send().await {
+                    Ok(resp) => match resp.text().await {
+                        Ok(b) => b,
+                        Err(_) => return (id, None, None),
+                    },
+                    Err(_) => return (id, None, None),
+                };
+                let hash = {
+                    use sha2::{Digest, Sha256};
+                    let digest = Sha256::digest(body.as_bytes());
+                    let mut out = String::with_capacity(64);
+                    for b in digest {
+                        use std::fmt::Write;
+                        let _ = write!(out, "{b:02x}");
                     }
+                    out
+                };
+                let changed = !last_hash.is_empty() && hash != last_hash;
+                if changed {
+                    let _ = client
+                        .post(&webhook)
+                        .json(&serde_json::json!({
+                            "event": "data_changed",
+                            "endpoint": endpoint,
+                            "timestamp": std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                        }))
+                        .send()
+                        .await;
+                }
+                (id, Some(hash), Some(changed))
+            }));
+        }
 
-                    watcher.last_response_hash = hash;
+        // 3) Merge — kısa write-lock altında hash + change_count update
+        let mut updates: Vec<(String, String, bool)> = Vec::new();
+        for h in handles {
+            if let Ok((id, Some(hash), Some(changed))) = h.await {
+                updates.push((id, hash, changed));
+            }
+        }
+        if updates.is_empty() {
+            return;
+        }
+        let mut watchers = self.cdc_watchers.write().await;
+        for (id, hash, changed) in updates {
+            if let Some(w) = watchers.iter_mut().find(|w| w.id == id) {
+                w.last_response_hash = hash;
+                if changed {
+                    w.change_count = w.change_count.saturating_add(1);
+                    tracing::info!(
+                        "CDC change detected: {} (change #{})",
+                        w.endpoint,
+                        w.change_count
+                    );
                 }
             }
         }
@@ -119,7 +179,10 @@ impl DataPipeline {
         } else {
             let count = buffer.len();
             buffer.clear();
-            tracing::debug!("Analytics buffer cleared ({} events, no sink configured)", count);
+            tracing::debug!(
+                "Analytics buffer cleared ({} events, no sink configured)",
+                count
+            );
         }
     }
 
@@ -128,5 +191,7 @@ impl DataPipeline {
         self.analytics_buffer.read().await.clone()
     }
 
-    pub async fn list_watchers(&self) -> Vec<CdcWatcher> { self.cdc_watchers.read().await.clone() }
+    pub async fn list_watchers(&self) -> Vec<CdcWatcher> {
+        self.cdc_watchers.read().await.clone()
+    }
 }
