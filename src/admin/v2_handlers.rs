@@ -480,8 +480,12 @@ pub async fn create_cron_job(
 ) -> HttpResponse {
     // SSRF guard — cron internal servislere de çağrı yapabilir; metadata her durumda block.
     if let Err(e) = crate::alerting::url_guard::validate_upstream_url(&body.url).await {
+        let err_str = e.to_string();
+        crate::metrics::SSRF_REJECTS
+            .with_label_values(&[crate::metrics::ssrf_category(&err_str)])
+            .inc();
         return HttpResponse::BadRequest()
-            .json(serde_json::json!({"error": format!("URL rejected: {}", e)}));
+            .json(serde_json::json!({"error": format!("URL rejected: {err_str}")}));
     }
     let schedule = crate::automation::cron::CronSchedule::EverySeconds(body.interval_secs);
     let id = scheduler

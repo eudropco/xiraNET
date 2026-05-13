@@ -150,6 +150,9 @@ impl SessionManager {
                     &active,
                 ],
             ) {
+                crate::metrics::DB_PERSIST_ERRORS
+                    .with_label_values(&["sessions"])
+                    .inc();
                 tracing::warn!(error = %e, "session persist failed");
             }
         }
@@ -194,6 +197,7 @@ impl SessionManager {
 
         self.sessions.insert(hashed.clone(), stored.clone());
         self.persist(&hashed, &stored);
+        crate::metrics::SESSION_EVENTS.with_label_values(&["created"]).inc();
 
         // User→hashed_tokens mapping
         let mut user_tokens = self.user_sessions.entry(user_id.to_string()).or_default();
@@ -240,14 +244,23 @@ impl SessionManager {
 
         if let Some(mut session) = self.sessions.get_mut(&hashed) {
             if !session.active || now > session.expires_at {
+                crate::metrics::SESSION_EVENTS
+                    .with_label_values(&["expired"])
+                    .inc();
                 return None;
             }
             session.last_activity = now;
+            crate::metrics::SESSION_EVENTS
+                .with_label_values(&["validated"])
+                .inc();
             // Caller'a plaintext token'ı geri ver (kullanım kolaylığı)
             let mut clone = session.clone();
             clone.token = token.to_string();
             return Some(clone);
         }
+        crate::metrics::SESSION_EVENTS
+            .with_label_values(&["not_found"])
+            .inc();
         None
     }
 
@@ -264,6 +277,9 @@ impl SessionManager {
             // Persist: tamamen sil, stale row bırakma.
             self.delete_persisted(&hashed);
             self.sessions.remove(&hashed);
+            crate::metrics::SESSION_EVENTS
+                .with_label_values(&["invalidated"])
+                .inc();
             true
         } else {
             false

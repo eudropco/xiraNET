@@ -134,6 +134,7 @@ pub async fn gateway_handler(
         if let crate::middleware::waf::WafVerdict::Block { reason, rule } =
             waf.inspect(&path, Some(query_string), body_str, &headers, &peer_ip_log)
         {
+            crate::metrics::WAF_BLOCKS.with_label_values(&[&rule]).inc();
             tracing::warn!(
                 "WAF BLOCKED: {} — rule: {} from {}",
                 reason,

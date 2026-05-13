@@ -37,8 +37,12 @@ pub async fn register_service(
 
     // SSRF guard — upstream localhost/RFC1918 OK ama metadata IP'leri reddedilir.
     if let Err(e) = crate::alerting::url_guard::validate_upstream_url(&req.upstream).await {
+        let err_str = e.to_string();
+        crate::metrics::SSRF_REJECTS
+            .with_label_values(&[crate::metrics::ssrf_category(&err_str)])
+            .inc();
         return HttpResponse::BadRequest()
-            .json(ApiResponse::<()>::error(format!("upstream rejected: {e}")));
+            .json(ApiResponse::<()>::error(format!("upstream rejected: {err_str}")));
     }
 
     let entry = registry.register_advanced(req);

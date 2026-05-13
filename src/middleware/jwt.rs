@@ -276,6 +276,10 @@ where
             Err(e) => {
                 // Detaylı hatayı server-side log'la ama client'a generic mesaj dön.
                 // Aksi halde endpoint forged-vs-expired-vs-wrong-issuer için oracle olur.
+                crate::metrics::JWT_REJECTS.inc();
+                crate::metrics::AUTH_REJECTS
+                    .with_label_values(&["jwt_invalid"])
+                    .inc();
                 tracing::warn!(error = %e, "JWT validation failed");
                 Box::pin(async move {
                     let response = HttpResponse::Unauthorized().json(serde_json::json!({

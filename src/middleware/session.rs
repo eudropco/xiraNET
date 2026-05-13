@@ -101,20 +101,30 @@ where
                         Ok(res.map_into_left_body())
                     })
                 }
-                None => Box::pin(async move {
+                None => {
+                    crate::metrics::AUTH_REJECTS
+                        .with_label_values(&["session_invalid"])
+                        .inc();
+                    Box::pin(async move {
+                        let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                            "error": "invalid or expired session"
+                        }));
+                        Ok(req.into_response(response).map_into_right_body())
+                    })
+                }
+            },
+            None => {
+                crate::metrics::AUTH_REJECTS
+                    .with_label_values(&["session_missing"])
+                    .inc();
+                Box::pin(async move {
                     let response = HttpResponse::Unauthorized().json(serde_json::json!({
-                        "error": "invalid or expired session"
+                        "error": "missing session token",
+                        "hint": "Use: Authorization: Bearer <token> or X-Session-Token: <token>"
                     }));
                     Ok(req.into_response(response).map_into_right_body())
-                }),
-            },
-            None => Box::pin(async move {
-                let response = HttpResponse::Unauthorized().json(serde_json::json!({
-                    "error": "missing session token",
-                    "hint": "Use: Authorization: Bearer <token> or X-Session-Token: <token>"
-                }));
-                Ok(req.into_response(response).map_into_right_body())
-            }),
+                })
+            }
         }
     }
 }

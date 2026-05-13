@@ -4,8 +4,8 @@ pub mod trace_collector;
 
 use actix_web::{HttpRequest, HttpResponse};
 use prometheus::{
-    register_histogram_vec, register_int_counter_vec, register_int_gauge, Encoder, HistogramVec,
-    IntCounterVec, IntGauge, TextEncoder,
+    register_histogram_vec, register_int_counter, register_int_counter_vec, register_int_gauge,
+    Encoder, HistogramVec, IntCounter, IntCounterVec, IntGauge, TextEncoder,
 };
 
 lazy_static::lazy_static! {
@@ -59,6 +59,76 @@ lazy_static::lazy_static! {
         "Proxy error count",
         &["service", "error_type"]
     ).unwrap();
+
+    // ═══════════════════════════════════════════════════════════════
+    // Security & persistence counters (v3.0 audit)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// WAF tarafından bloke edilen request sayısı (rule başına).
+    pub static ref WAF_BLOCKS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_waf_blocks_total",
+        "Requests blocked by WAF, by rule",
+        &["rule"]
+    ).unwrap();
+
+    /// SSRF guard tarafından reddedilen URL sayısı (kategori başına).
+    pub static ref SSRF_REJECTS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_ssrf_rejects_total",
+        "Outbound URLs rejected by SSRF guard, by reason category",
+        &["category"]
+    ).unwrap();
+
+    /// Auth reject — kategori: missing_key, wrong_key, jwt_invalid, session_invalid, role_insufficient.
+    pub static ref AUTH_REJECTS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_auth_rejects_total",
+        "Authentication/authorization rejections, by category",
+        &["category"]
+    ).unwrap();
+
+    /// SQLite persist hataları — tablo başına (audit_log, sessions, cron_jobs, registry vb.).
+    pub static ref DB_PERSIST_ERRORS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_db_persist_errors_total",
+        "SQLite persistence failures, by table",
+        &["table"]
+    ).unwrap();
+
+    /// Session lifecycle event'ları — created, validated, invalidated, expired.
+    pub static ref SESSION_EVENTS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_session_events_total",
+        "Session lifecycle event counts",
+        &["event"]
+    ).unwrap();
+
+    /// MFA event'leri — enroll_started, enroll_verified, login_success, login_failed,
+    /// disabled_by_admin.
+    pub static ref MFA_EVENTS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_mfa_events_total",
+        "MFA lifecycle event counts",
+        &["event"]
+    ).unwrap();
+
+    /// Boot-time veya runtime'da JWT init/validation hataları.
+    pub static ref JWT_REJECTS: IntCounter = register_int_counter!(
+        "xiranet_jwt_rejects_total",
+        "JWT validation rejections (signature/exp/alg/iss/aud)"
+    ).unwrap();
+}
+
+/// SSRF kategori isim normalize: UrlGuardError → kısa label.
+pub fn ssrf_category(err: &str) -> &'static str {
+    if err.contains("metadata") {
+        "metadata"
+    } else if err.contains("loopback") || err.contains("127.") || err.contains("::1") {
+        "loopback"
+    } else if err.contains("private") || err.contains("10.") || err.contains("192.168") {
+        "private"
+    } else if err.contains("scheme") {
+        "bad_scheme"
+    } else if err.contains("DNS") {
+        "dns"
+    } else {
+        "other"
+    }
 }
 
 /// Record a request metric

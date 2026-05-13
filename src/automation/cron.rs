@@ -178,6 +178,9 @@ impl CronScheduler {
                     &(job.failure_count as i64),
                 ],
             ) {
+                crate::metrics::DB_PERSIST_ERRORS
+                    .with_label_values(&["cron_jobs"])
+                    .inc();
                 tracing::warn!(error = %e, job_id = %job.id, "persist_job failed");
             }
         }

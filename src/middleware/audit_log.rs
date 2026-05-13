@@ -73,6 +73,9 @@ impl AuditLogger {
                     &(entry.response_size as i64),
                 ],
             ) {
+                crate::metrics::DB_PERSIST_ERRORS
+                    .with_label_values(&["audit_log"])
+                    .inc();
                 tracing::warn!(error = %e, "audit_log persist failed");
             }
         }

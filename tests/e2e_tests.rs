@@ -700,6 +700,42 @@ enabled = false
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
+    fn metrics_includes_new_security_counters_after_traffic() {
+        let s = server();
+        // Generate some auth-reject traffic so counters tick up
+        for _ in 0..3 {
+            let _ = ureq_get(&format!("{}/xira/services", s.base_url), Some("wrong-key"));
+        }
+        // SSRF reject via cron metadata IP
+        let _ = ureq_post_json(
+            &format!("{}/xira/automation/cron", s.base_url),
+            Some(&s.api_key),
+            r#"{"name":"x","url":"http://169.254.169.254/","method":"GET","interval_secs":60}"#,
+        );
+
+        let m = ureq_get(&format!("{}/metrics", s.base_url), None).unwrap();
+        assert_eq!(m.status, 200);
+        // Yeni v3.0 audit counter'ları görünmeli
+        assert!(
+            m.body.contains("xiranet_auth_rejects_total"),
+            "xiranet_auth_rejects_total counter eksik"
+        );
+        assert!(
+            m.body.contains("xiranet_ssrf_rejects_total"),
+            "xiranet_ssrf_rejects_total counter eksik"
+        );
+        assert!(
+            m.body.contains("xiranet_session_events_total"),
+            "xiranet_session_events_total counter eksik"
+        );
+        // wrong_key kategorisi en az 3 increment görmeli
+        assert!(
+            m.body.contains("wrong_key"),
+            "wrong_key category not exported"
+        );
+    }
+
+    #[test]
     fn rbac_viewer_cannot_list_users_admin() {
         let s = server();
         let nano = std::time::SystemTime::now()

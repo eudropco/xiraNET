@@ -281,6 +281,9 @@ impl UserManager {
                     &mfa_secret_stored as &dyn rusqlite::types::ToSql,
                 ],
             ) {
+                crate::metrics::DB_PERSIST_ERRORS
+                    .with_label_values(&["identity_users"])
+                    .inc();
                 tracing::warn!(error = %e, user_id = %user.id, "failed to persist user");
             }
         }
@@ -447,6 +450,9 @@ impl UserManager {
         user.mfa_secret = Some(secret.clone());
         // Henüz mfa_enabled false — verify ile aktif olacak.
         self.persist_user(&user);
+        crate::metrics::MFA_EVENTS
+            .with_label_values(&["enroll_started"])
+            .inc();
         Ok((secret, qr))
     }
 
@@ -466,6 +472,9 @@ impl UserManager {
         }
         user.mfa_enabled = true;
         self.persist_user(&user);
+        crate::metrics::MFA_EVENTS
+            .with_label_values(&["enroll_verified"])
+            .inc();
         true
     }
 
@@ -486,8 +495,14 @@ impl UserManager {
             None => return AuthResult::InvalidCredentials,
         };
         if !crate::identity::mfa::MfaEngine::verify_totp(&secret, code) {
+            crate::metrics::MFA_EVENTS
+                .with_label_values(&["login_failed"])
+                .inc();
             return AuthResult::InvalidCredentials;
         }
+        crate::metrics::MFA_EVENTS
+            .with_label_values(&["login_success"])
+            .inc();
         let now = now_secs();
         user.last_login = now;
         user.login_count += 1;
@@ -508,6 +523,9 @@ impl UserManager {
             user.mfa_enabled = false;
             user.mfa_secret = None;
             self.persist_user(&user);
+            crate::metrics::MFA_EVENTS
+                .with_label_values(&["disabled_by_admin"])
+                .inc();
             true
         } else {
             false

@@ -103,6 +103,9 @@ where
         };
 
         if !role.satisfies(&self.min_role) {
+            crate::metrics::AUTH_REJECTS
+                .with_label_values(&["role_insufficient"])
+                .inc();
             let required = self.min_role.as_str().to_string();
             let actual = role.as_str().to_string();
             return Box::pin(async move {

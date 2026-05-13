@@ -96,7 +96,19 @@ where
                     Ok(res.map_into_left_body())
                 })
             }
-            _ => {
+            Some(_) => {
+                crate::metrics::AUTH_REJECTS.with_label_values(&["wrong_key"]).inc();
+                tracing::warn!("Unauthorized access attempt to admin API: {}", path);
+                Box::pin(async move {
+                    let response = HttpResponse::Unauthorized().json(serde_json::json!({
+                        "error": "Unauthorized",
+                        "message": "Valid X-Api-Key header required"
+                    }));
+                    Ok(req.into_response(response).map_into_right_body())
+                })
+            }
+            None => {
+                crate::metrics::AUTH_REJECTS.with_label_values(&["missing_key"]).inc();
                 tracing::warn!("Unauthorized access attempt to admin API: {}", path);
                 Box::pin(async move {
                     let response = HttpResponse::Unauthorized().json(serde_json::json!({
