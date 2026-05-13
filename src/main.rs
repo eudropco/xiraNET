@@ -82,13 +82,9 @@ fn print_banner(host: &str, port: u16, features: &[&str]) {
     );
 }
 
-fn is_default_admin_key(api_key: &str) -> bool {
-    api_key == "xira-default-key" || api_key == "xira-secret-key-change-me"
-}
-
-fn binds_externally(host: &str) -> bool {
-    !matches!(host, "127.0.0.1" | "localhost" | "::1")
-}
+// Boot-time default-key + bind check now lives in xiranet::config::{is_default_admin_key,
+// binds_externally} so CLI `xira system validate` and the `Serve` boot path use the
+// same source of truth.
 
 fn start_runtime_config_sync(
     shared_config: Arc<tokio::sync::RwLock<XiraConfig>>,
@@ -158,20 +154,23 @@ async fn main() -> std::io::Result<()> {
             let workers = xira_config.gateway.workers;
             let api_key = xira_config.admin.api_key.clone();
 
-            // ⚠️ Default key guard — warn loudly in production
-            if is_default_admin_key(&api_key) {
-                tracing::warn!("═══════════════════════════════════════════════════════════");
-                tracing::warn!("⚠️  SECURITY WARNING: Using default admin API key!");
-                tracing::warn!("⚠️  Change [admin].api_key in your config before deploying.");
-                tracing::warn!("═══════════════════════════════════════════════════════════");
-                if binds_externally(&host) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!(
-                            "Refusing to bind {host}:{port} with the default admin API key"
-                        ),
-                    ));
+            // Single-source config validation — boot reddi + warning loop
+            let report = xira_config.validate();
+            for w in &report.warnings {
+                tracing::warn!(target: "xira::config", "{w}");
+            }
+            if !report.ok() {
+                for e in &report.errors {
+                    tracing::error!(target: "xira::config", "{e}");
                 }
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "config validation failed with {} blocking error(s); run `xira system validate --config {}` for details",
+                        report.errors.len(),
+                        config
+                    ),
+                ));
             }
 
             // SQLite Storage (path from config or default)

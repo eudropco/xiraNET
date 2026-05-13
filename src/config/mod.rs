@@ -552,11 +552,180 @@ fn default_health_endpoint() -> String {
 /// Thread-safe config holder for hot-reload
 pub type SharedConfig = Arc<RwLock<XiraConfig>>;
 
+/// Config semantic doğrulama sonucu — error'lar `Err`, soft warning'ler `Ok(warnings)`.
+#[derive(Debug, Default, Clone)]
+pub struct ValidationReport {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl ValidationReport {
+    pub fn ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Default/example admin key'lerini tanı.
+pub fn is_default_admin_key(api_key: &str) -> bool {
+    matches!(
+        api_key,
+        "" | "xira-default-key"
+            | "xira-secret-key-change-me"
+            | "change-me"
+            | "changeme"
+            | "secret"
+    )
+}
+
+/// Default/example JWT secret'larını tanı.
+pub fn is_default_jwt_secret(s: &str) -> bool {
+    matches!(
+        s,
+        ""
+            | "your-jwt-secret-key-here"
+            | "change-me"
+            | "changeme"
+            | "secret"
+            | "jwt-secret"
+            | "xira-secret-key-change-me"
+    )
+}
+
+pub fn binds_externally(host: &str) -> bool {
+    !matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
 impl XiraConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let content = fs::read_to_string(path)?;
         let config: XiraConfig = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Config'in semantic doğrulamasını yap. Boot-time guard'ların tek source-of-truth'u.
+    /// CLI `xira system validate` ve `main.rs::Serve` aynı kontrolü kullanır.
+    pub fn validate(&self) -> ValidationReport {
+        let mut r = ValidationReport::default();
+
+        // 1) Default admin key + dış bind = boot reddi
+        if is_default_admin_key(&self.admin.api_key) {
+            if binds_externally(&self.gateway.host) {
+                r.errors.push(format!(
+                    "admin.api_key is a known default and gateway.host = {} binds externally — refuse to start",
+                    self.gateway.host
+                ));
+            } else {
+                r.warnings.push(
+                    "admin.api_key is a known default; change before deploying externally".into(),
+                );
+            }
+        }
+
+        // 2) JWT enabled → secret kalitesi
+        if self.jwt.enabled {
+            if is_default_jwt_secret(&self.jwt.secret) {
+                r.errors.push(
+                    "jwt.secret is a known default/example value — refuse to start with jwt.enabled=true"
+                        .into(),
+                );
+            }
+            let algo_up = self.jwt.algorithm.to_uppercase();
+            match algo_up.as_str() {
+                "HS256" | "HS384" | "HS512" => {
+                    if self.jwt.secret.len() < 32 {
+                        r.errors.push(format!(
+                            "jwt.secret too short ({} bytes), HMAC algorithms require >= 32 bytes",
+                            self.jwt.secret.len()
+                        ));
+                    }
+                }
+                "RS256" => {
+                    use jsonwebtoken::DecodingKey;
+                    if DecodingKey::from_rsa_pem(self.jwt.secret.as_bytes()).is_err() {
+                        r.errors.push(
+                            "jwt.algorithm = RS256 but jwt.secret is not a valid RSA PEM".into(),
+                        );
+                    }
+                }
+                other => {
+                    r.errors
+                        .push(format!("jwt.algorithm = {other} unsupported (HS256/HS384/HS512/RS256)"));
+                }
+            }
+        }
+
+        // 3) CORS: explicit origin listesi boş → tüm browser çağrıları başarısız olur (warning)
+        if self.cors.allowed_origins.is_empty() {
+            r.warnings.push(
+                "cors.allowed_origins is empty — browser requests will be rejected by CORS".into(),
+            );
+        }
+
+        // 4) Duplicate service prefix
+        let mut seen = std::collections::HashSet::new();
+        for svc in &self.services {
+            if !seen.insert(svc.prefix.clone()) {
+                r.errors.push(format!(
+                    "duplicate [[services]] prefix: {} (each prefix must be unique)",
+                    svc.prefix
+                ));
+            }
+        }
+
+        // 5) TLS dosya varlığı
+        if let Some(ref tls) = self.tls {
+            if tls.enabled {
+                if !std::path::Path::new(&tls.cert_path).exists() {
+                    r.errors
+                        .push(format!("tls.cert_path not found: {}", tls.cert_path));
+                }
+                if !std::path::Path::new(&tls.key_path).exists() {
+                    r.errors
+                        .push(format!("tls.key_path not found: {}", tls.key_path));
+                }
+                if tls.mtls_enabled {
+                    if let Some(ref ca) = tls.client_ca_path {
+                        if !std::path::Path::new(ca).exists() {
+                            r.errors
+                                .push(format!("tls.client_ca_path not found: {ca}"));
+                        }
+                    } else {
+                        r.errors
+                            .push("tls.mtls_enabled = true requires client_ca_path".into());
+                    }
+                }
+            }
+        }
+
+        // 6) Identity password_min_length sanity
+        if self.identity.password_min_length < 8 {
+            r.warnings.push(format!(
+                "identity.password_min_length = {} is below recommended 8",
+                self.identity.password_min_length
+            ));
+        }
+
+        // 7) Plugin directory uyarı
+        if self.plugins.enabled && !std::path::Path::new(&self.plugins.directory).exists() {
+            r.warnings.push(format!(
+                "plugins.enabled = true but directory not found: {}",
+                self.plugins.directory
+            ));
+        }
+
+        // 8) Rate limit sanity
+        if self.rate_limit.max_requests == 0 {
+            r.errors
+                .push("rate_limit.max_requests = 0 blocks all traffic".into());
+        }
+
+        // 9) Cache sanity
+        if self.cache.enabled && self.cache.max_entries == 0 {
+            r.warnings
+                .push("cache.enabled = true but cache.max_entries = 0 (cache effectively off)".into());
+        }
+
+        r
     }
 
     pub fn load_or_default() -> Self {

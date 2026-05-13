@@ -539,57 +539,75 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
             println!("🗑️  {}", serde_json::to_string_pretty(&body)?);
         }
 
-        // ═══ v1.0.1 — New Commands ═══
+        // ═══ v3.0 — Deep config validation (semantic, security-aware) ═══
         Commands::Validate { config } => {
-            println!("🔍 Validating config: {config}");
+            println!("🔍 Validating config: {config}\n");
             if !std::path::Path::new(config).exists() {
-                println!("❌ Config file not found: {config}");
-                return Ok(());
+                eprintln!("❌ Config file not found: {config}");
+                std::process::exit(1);
             }
-            match crate::config::XiraConfig::load(config) {
-                Ok(cfg) => {
-                    println!("✅ Config is valid!");
-                    println!("  Gateway:     {}:{}", cfg.gateway.host, cfg.gateway.port);
-                    println!("  Workers:     {}", cfg.gateway.workers);
-                    println!("  Services:    {}", cfg.services.len());
-                    println!(
-                        "  JWT:         {}",
-                        if cfg.jwt.enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        }
-                    );
-                    println!(
-                        "  Cache:       {}",
-                        if cfg.cache.enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        }
-                    );
-                    let grpc_str = if cfg.grpc.enabled {
-                        format!("port {}", cfg.grpc.port)
-                    } else {
-                        "disabled".to_string()
-                    };
-                    println!("  gRPC:        {grpc_str}");
-                    println!(
-                        "  TLS:         {}",
-                        if cfg.tls.is_some() {
-                            "configured"
-                        } else {
-                            "disabled"
-                        }
-                    );
-                    println!(
-                        "  Rate Limit:  {}/{}s",
-                        cfg.rate_limit.max_requests, cfg.rate_limit.window_secs
-                    );
-                }
+            let cfg = match crate::config::XiraConfig::load(config) {
+                Ok(c) => c,
                 Err(e) => {
-                    println!("❌ Config validation failed: {e}");
+                    eprintln!("❌ Parse error: {e}");
+                    std::process::exit(1);
                 }
+            };
+
+            let report = cfg.validate();
+
+            // Özet
+            println!("  Gateway:     {}:{}", cfg.gateway.host, cfg.gateway.port);
+            println!("  Workers:     {}", cfg.gateway.workers);
+            println!("  Services:    {}", cfg.services.len());
+            println!(
+                "  JWT:         {} ({})",
+                if cfg.jwt.enabled { "enabled" } else { "disabled" },
+                cfg.jwt.algorithm,
+            );
+            println!(
+                "  Cache:       {} ({} entries)",
+                if cfg.cache.enabled { "enabled" } else { "disabled" },
+                cfg.cache.max_entries
+            );
+            println!("  CORS origins: {}", cfg.cors.allowed_origins.len());
+            println!(
+                "  TLS:         {}",
+                if cfg.tls.is_some() { "configured" } else { "disabled" }
+            );
+            println!(
+                "  Rate Limit:  {}/{}s",
+                cfg.rate_limit.max_requests, cfg.rate_limit.window_secs
+            );
+
+            // Errors
+            if !report.errors.is_empty() {
+                println!("\n❌ Errors ({}):", report.errors.len());
+                for e in &report.errors {
+                    println!("  • {e}");
+                }
+            }
+
+            // Warnings
+            if !report.warnings.is_empty() {
+                println!("\n⚠️  Warnings ({}):", report.warnings.len());
+                for w in &report.warnings {
+                    println!("  • {w}");
+                }
+            }
+
+            if report.ok() {
+                if report.warnings.is_empty() {
+                    println!("\n✅ Config is valid — no issues found.");
+                } else {
+                    println!("\n✅ Config is valid (with {} warning(s) above).", report.warnings.len());
+                }
+            } else {
+                println!(
+                    "\n❌ Config has {} blocking error(s) — server would refuse to start.",
+                    report.errors.len()
+                );
+                std::process::exit(1);
             }
         }
 

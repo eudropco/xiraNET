@@ -1047,6 +1047,155 @@ mod websocket_auth_tests {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Config validation — boot-time guard'ların tek source-of-truth'u
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod config_validate_tests {
+    use xiranet::config::XiraConfig;
+
+    fn base_toml() -> String {
+        r#"
+[gateway]
+host = "127.0.0.1"
+port = 9000
+workers = 1
+
+[admin]
+api_key = "not-a-default-key-xyz-abc-1234"
+enabled = true
+
+[health]
+interval_secs = 30
+timeout_secs = 5
+
+[cors]
+allowed_origins = ["http://localhost"]
+
+[rate_limit]
+max_requests = 100
+window_secs = 60
+"#
+        .to_string()
+    }
+
+    fn parse(toml: &str) -> XiraConfig {
+        toml::from_str(toml).expect("parse")
+    }
+
+    #[test]
+    fn clean_config_validates() {
+        let cfg = parse(&base_toml());
+        let r = cfg.validate();
+        assert!(r.ok(), "errors: {:?}", r.errors);
+    }
+
+    #[test]
+    fn default_admin_key_with_external_bind_rejected() {
+        let mut t = base_toml();
+        t = t.replace("not-a-default-key-xyz-abc-1234", "xira-secret-key-change-me");
+        t = t.replace("127.0.0.1", "0.0.0.0");
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(!r.ok(), "must reject default key + external bind");
+        assert!(r.errors.iter().any(|e| e.contains("admin.api_key")));
+    }
+
+    #[test]
+    fn default_admin_key_on_loopback_is_warning_only() {
+        let t = base_toml().replace("not-a-default-key-xyz-abc-1234", "xira-secret-key-change-me");
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(r.ok(), "loopback bind ile default key sadece warning olmalı");
+        assert!(!r.warnings.is_empty());
+    }
+
+    #[test]
+    fn weak_jwt_secret_rejected() {
+        let t = format!(
+            "{}\n[jwt]\nenabled = true\nsecret = \"too-short\"\nalgorithm = \"HS256\"\n",
+            base_toml()
+        );
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(!r.ok());
+        assert!(r.errors.iter().any(|e| e.contains("jwt.secret too short")));
+    }
+
+    #[test]
+    fn default_jwt_secret_rejected_when_enabled() {
+        let t = format!(
+            "{}\n[jwt]\nenabled = true\nsecret = \"your-jwt-secret-key-here\"\nalgorithm = \"HS256\"\n",
+            base_toml()
+        );
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(!r.ok());
+        assert!(r
+            .errors
+            .iter()
+            .any(|e| e.contains("known default") || e.contains("default")));
+    }
+
+    #[test]
+    fn rs256_with_non_pem_secret_rejected() {
+        let t = format!(
+            "{}\n[jwt]\nenabled = true\nsecret = \"this-is-not-a-pem-but-long-enough-to-pass-32\"\nalgorithm = \"RS256\"\n",
+            base_toml()
+        );
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(!r.ok());
+        assert!(r.errors.iter().any(|e| e.contains("RSA PEM")));
+    }
+
+    #[test]
+    fn empty_cors_origins_warning() {
+        let t = base_toml().replace(
+            "allowed_origins = [\"http://localhost\"]",
+            "allowed_origins = []",
+        );
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(r.ok(), "empty CORS should be warning, not error");
+        assert!(r.warnings.iter().any(|w| w.contains("cors.allowed_origins")));
+    }
+
+    #[test]
+    fn duplicate_service_prefix_rejected() {
+        let t = format!(
+            "{}\n[[services]]\nname = \"a\"\nprefix = \"/api\"\nupstream = \"http://localhost:3001\"\nhealth_endpoint = \"/health\"\n[[services]]\nname = \"b\"\nprefix = \"/api\"\nupstream = \"http://localhost:3002\"\nhealth_endpoint = \"/health\"\n",
+            base_toml()
+        );
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(!r.ok());
+        assert!(r.errors.iter().any(|e| e.contains("duplicate")));
+    }
+
+    #[test]
+    fn rate_limit_zero_rejected() {
+        let t = base_toml().replace("max_requests = 100", "max_requests = 0");
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(!r.ok());
+        assert!(r.errors.iter().any(|e| e.contains("rate_limit")));
+    }
+
+    #[test]
+    fn password_min_length_below_8_warning() {
+        let t = format!(
+            "{}\n[identity]\nregistration_enabled = true\nmax_sessions_per_user = 5\npassword_min_length = 4\n",
+            base_toml()
+        );
+        let cfg = parse(&t);
+        let r = cfg.validate();
+        assert!(r.ok(), "password length is warning not error");
+        assert!(r.warnings.iter().any(|w| w.contains("password_min_length")));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // RBAC Tests — UserRole hierarchy + RequireRole middleware
 // ═══════════════════════════════════════════════════════════════
 
