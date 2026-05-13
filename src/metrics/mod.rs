@@ -71,6 +71,14 @@ lazy_static::lazy_static! {
         &["rule"]
     ).unwrap();
 
+    /// WAF detect_only modunda tespit edilen ama bloke edilmeyen request'ler
+    /// (audit trail — operatör tehdit yüzeyini gözlemleyebilsin).
+    pub static ref WAF_DETECTS: IntCounterVec = register_int_counter_vec!(
+        "xiranet_waf_detects_total",
+        "Requests matched by WAF rules in detect_only mode (not blocked)",
+        &["rule"]
+    ).unwrap();
+
     /// SSRF guard tarafından reddedilen URL sayısı (kategori başına).
     pub static ref SSRF_REJECTS: IntCounterVec = register_int_counter_vec!(
         "xiranet_ssrf_rejects_total",

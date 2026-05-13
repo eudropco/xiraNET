@@ -120,6 +120,9 @@ where
 
             drop(entry);
 
+            crate::metrics::AUTH_REJECTS
+                .with_label_values(&["rate_limited"])
+                .inc();
             tracing::warn!("Rate limit exceeded for IP: {}", ip);
             return Box::pin(async move {
                 let response = HttpResponse::TooManyRequests()

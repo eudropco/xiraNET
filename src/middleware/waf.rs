@@ -38,6 +38,14 @@ pub enum WafVerdict {
     Block { reason: String, rule: String },
 }
 
+/// Verdict'in rule label'ını çek (metric label'ı için). Allow için "ALLOW".
+fn verdict_rule(v: &WafVerdict) -> String {
+    match v {
+        WafVerdict::Allow => "ALLOW".to_string(),
+        WafVerdict::Block { rule, .. } => rule.clone(),
+    }
+}
+
 impl Waf {
     pub fn new(enabled: bool, mode: WafMode) -> Self {
         Self {
@@ -124,6 +132,7 @@ impl Waf {
                     };
                     tracing::warn!("🛡️ WAF SQLI: {} from {}", safe_truncate(input, 80), ip);
                     if self.mode == WafMode::DetectOnly {
+                        crate::metrics::WAF_DETECTS.with_label_values(&[&verdict_rule(&verdict)]).inc();
                         return WafVerdict::Allow;
                     }
                     return verdict;
@@ -141,6 +150,7 @@ impl Waf {
                     };
                     tracing::warn!("🛡️ WAF XSS: {} from {}", safe_truncate(input, 80), ip);
                     if self.mode == WafMode::DetectOnly {
+                        crate::metrics::WAF_DETECTS.with_label_values(&[&verdict_rule(&verdict)]).inc();
                         return WafVerdict::Allow;
                     }
                     return verdict;
@@ -165,6 +175,7 @@ impl Waf {
                         ip
                     );
                     if self.mode == WafMode::DetectOnly {
+                        crate::metrics::WAF_DETECTS.with_label_values(&[&verdict_rule(&verdict)]).inc();
                         return WafVerdict::Allow;
                     }
                     return verdict;

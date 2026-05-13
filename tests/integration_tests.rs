@@ -110,6 +110,52 @@ mod waf_tests {
             "Log mode should not block, only log"
         );
     }
+
+    #[test]
+    fn test_waf_detect_only_increments_audit_counter() {
+        // detect_only modunda saldırı match etse bile Allow dönmeli,
+        // ama xiranet_waf_detects_total counter tick'lemeli (audit trail).
+        let before = xiranet::metrics::WAF_DETECTS.with_label_values(&["SQLI"]).get();
+
+        let waf = Waf::new(true, WafMode::DetectOnly);
+        let _ = waf.inspect(
+            "/api/users",
+            Some("id=1 union select from users"),
+            "",
+            &[],
+            "127.0.0.1",
+        );
+
+        let after = xiranet::metrics::WAF_DETECTS.with_label_values(&["SQLI"]).get();
+        assert!(
+            after > before,
+            "WAF_DETECTS{{SQLI}} must increment in detect_only mode (before={before}, after={after})"
+        );
+    }
+
+    #[test]
+    fn test_waf_clean_request_no_false_positive_on_email() {
+        // K2 fix sonrası: '@' standalone false positive üretmemeli (önceden block).
+        let waf = Waf::new(true, WafMode::Block);
+        let body = r#"{"email":"mert@example.com","note":"hello; world"}"#;
+        let verdict = waf.inspect("/api/users", None, body, &[], "127.0.0.1");
+        assert!(
+            matches!(verdict, WafVerdict::Allow),
+            "Legitimate email + semicolon in JSON should not trip SQLi rule"
+        );
+    }
+
+    #[test]
+    fn test_waf_clean_request_no_false_positive_on_dash_dash() {
+        // '--' standalone (markdown gibi) artık SQL keyword olmadan match etmemeli.
+        let waf = Waf::new(true, WafMode::Block);
+        let body = "hello -- end of comment\nmore text";
+        let verdict = waf.inspect("/api/test", None, body, &[], "127.0.0.1");
+        assert!(
+            matches!(verdict, WafVerdict::Allow),
+            "Trailing -- comment alone should not match SQLi"
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
