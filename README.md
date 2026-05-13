@@ -505,6 +505,31 @@ Bu sürüm geniş bir security/correctness audit'inden çıktı. Tam liste için
 - `rust-toolchain.toml`: 1.88 pin.
 - `let _ = storage.*` silent fail → `tracing::warn`.
 
+## Multi-node deployment notları
+
+xiraNET şu anda **single-node** olarak tasarlandı. Yatay ölçeklemek için
+deployment-level çözüm gerekir; uygulama içinde session-replikasyon yoktur.
+
+| Sorun | Çözüm |
+|-------|-------|
+| Session validation node-local | Sticky LB (cookie/header bazlı affinity) zorunlu — örnek nginx `ip_hash` veya ALB target group stickiness |
+| Audit log her node ayrı SQLite | Remote syslog (rsyslog → SIEM) önerilir; SQLite'lar workspace-local kalır |
+| WAF custom rules node-local | Config file shared volume'da olmalı veya admin endpoint her node'a apply (Phase 4'te broadcast düşünülüyor) |
+| Sessions persistence | Her node `XIRA_DB_PATH` ayrı; restart sonrası kendi store'undan yükler |
+
+Multi-node deployment'ı izlemek için Grafana'da:
+
+- `xiranet_sessions_active{instance=...}` — her node'un aktif session sayısı.
+  Sticky LB doğru çalışıyorsa bir kullanıcının yarısı bir node'da, yarısı
+  başkasında olmamalı; spike ile detected.
+- `xiranet_http_requests_total{instance=...}` — yük dağılımı kontrolü.
+- `xiranet_db_persist_errors_total` — SQLite shared volume kullanılıyorsa
+  contention'da bu artar (uyarı: shared SQLite önerilmez).
+
+**Phase 4 yol haritası** (henüz implement edilmedi): Redis-backed session
+store seçeneği + WAF rule broadcast (config hot-reload üzerinden değil,
+gerçek pub/sub).
+
 ## Threat model
 
 xiraNET'in nelere koruma sağladığını ve **NEYE SAĞLAMADIĞINI** açıkça yazmak, kullanıcının doğru yere yatırım yapmasını sağlar.

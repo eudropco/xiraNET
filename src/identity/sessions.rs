@@ -197,6 +197,7 @@ impl SessionManager {
         self.sessions.insert(hashed.clone(), stored.clone());
         self.persist(&hashed, &stored);
         crate::metrics::SESSION_EVENTS.with_label_values(&["created"]).inc();
+        crate::metrics::SESSIONS_ACTIVE.set(self.active_count() as i64);
 
         // User→hashed_tokens mapping
         let mut user_tokens = self.user_sessions.entry(user_id.to_string()).or_default();
@@ -279,6 +280,7 @@ impl SessionManager {
             crate::metrics::SESSION_EVENTS
                 .with_label_values(&["invalidated"])
                 .inc();
+            crate::metrics::SESSIONS_ACTIVE.set(self.active_count() as i64);
             true
         } else {
             false
@@ -340,6 +342,7 @@ impl SessionManager {
                 tokens.retain(|t| t != &hashed);
             }
         }
+        crate::metrics::SESSIONS_ACTIVE.set(self.active_count() as i64);
         cleaned
     }
 

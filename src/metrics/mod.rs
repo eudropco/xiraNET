@@ -107,6 +107,13 @@ lazy_static::lazy_static! {
         &["event"]
     ).unwrap();
 
+    /// Bu node'daki aktif session sayısı (multi-node deploy'de Grafana panel'inde
+    /// her node ayrı bar gösterir — sticky LB doğru çalışıyor mu doğrulamak için).
+    pub static ref SESSIONS_ACTIVE: IntGauge = register_int_gauge!(
+        "xiranet_sessions_active",
+        "Currently active sessions on this node"
+    ).unwrap();
+
     /// MFA event'leri — enroll_started, enroll_verified, login_success, login_failed,
     /// disabled_by_admin.
     pub static ref MFA_EVENTS: IntCounterVec = register_int_counter_vec!(

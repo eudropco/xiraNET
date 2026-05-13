@@ -40,6 +40,9 @@ pub enum Commands {
     /// System utilities
     #[command(subcommand)]
     System(SystemCommands),
+    /// User administration via /auth/admin/* (RBAC: SuperAdmin session token)
+    #[command(subcommand)]
+    Admin(AdminCommands),
     /// Servis ekle
     #[command(hide = true)]
     Add {
@@ -264,6 +267,59 @@ pub enum OpsCommands {
         gateway: String,
         #[arg(short, long, env = "XIRA_API_KEY", hide_env_values = true, default_value = "")]
         key: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AdminCommands {
+    /// List all users (SuperAdmin token required)
+    Users {
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        /// Session token (xira_tok_...) — SuperAdmin role gerekir
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        token: String,
+    },
+    /// Set user role
+    SetRole {
+        user_id: String,
+        /// New role: SuperAdmin / Admin / Developer / Service / Viewer
+        role: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        token: String,
+    },
+    /// Disable a user
+    Disable {
+        user_id: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        token: String,
+    },
+    /// Force logout all sessions of a user
+    Logout {
+        user_id: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        token: String,
+    },
+    /// MFA recovery — disable MFA for a user
+    MfaReset {
+        user_id: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        token: String,
+    },
+    /// Login (email + password) and print session token
+    Login {
+        email: String,
+        password: String,
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
     },
 }
 
@@ -964,6 +1020,147 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                 .await;
             }
         },
+
+        Commands::Admin(sub) => {
+            let bearer = |t: &str| format!("Bearer {t}");
+            match sub {
+                AdminCommands::Users { gateway, token } => {
+                    let resp = client
+                        .get(format!("{gateway}/auth/admin/users"))
+                        .header("Authorization", bearer(token))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if !status.is_success() {
+                        println!("❌ {status}: {body}");
+                        return Ok(());
+                    }
+                    if let Some(users) = body.get("users").and_then(|u| u.as_array()) {
+                        println!("👤 Users ({}):", users.len());
+                        for u in users {
+                            let id = u.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                            let email = u.get("email").and_then(|v| v.as_str()).unwrap_or("?");
+                            let role = u.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                            let mfa = u
+                                .get("mfa_enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let enabled = u
+                                .get("enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true);
+                            let status_icon = if !enabled { "🚫" } else { "🟢" };
+                            let mfa_icon = if mfa { " 🔐" } else { "" };
+                            println!("  {status_icon} {email}  [{role}]{mfa_icon}");
+                            println!("     id: {id}");
+                        }
+                    }
+                }
+                AdminCommands::SetRole {
+                    user_id,
+                    role,
+                    gateway,
+                    token,
+                } => {
+                    let resp = client
+                        .put(format!("{gateway}/auth/admin/users/{user_id}/role"))
+                        .header("Authorization", bearer(token))
+                        .json(&serde_json::json!({"role": role}))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if status.is_success() {
+                        println!("✅ role updated to {role}");
+                        println!("   sessions invalidated: {}",
+                            body.get("sessions_invalidated").and_then(|v| v.as_u64()).unwrap_or(0));
+                    } else {
+                        println!("❌ {status}: {body}");
+                    }
+                }
+                AdminCommands::Disable { user_id, gateway, token } => {
+                    let resp = client
+                        .post(format!("{gateway}/auth/admin/users/{user_id}/disable"))
+                        .header("Authorization", bearer(token))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if status.is_success() {
+                        println!("🚫 user disabled");
+                        println!("   sessions invalidated: {}",
+                            body.get("sessions_invalidated").and_then(|v| v.as_u64()).unwrap_or(0));
+                    } else {
+                        println!("❌ {status}: {body}");
+                    }
+                }
+                AdminCommands::Logout { user_id, gateway, token } => {
+                    let resp = client
+                        .post(format!("{gateway}/auth/admin/users/{user_id}/logout-all"))
+                        .header("Authorization", bearer(token))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if status.is_success() {
+                        let n = body.get("invalidated").and_then(|v| v.as_u64()).unwrap_or(0);
+                        println!("✅ {n} session(s) invalidated");
+                    } else {
+                        println!("❌ {status}: {body}");
+                    }
+                }
+                AdminCommands::MfaReset { user_id, gateway, token } => {
+                    let resp = client
+                        .post(format!("{gateway}/auth/admin/users/{user_id}/mfa/disable"))
+                        .header("Authorization", bearer(token))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if status.is_success() {
+                        println!("🔓 MFA disabled (user must re-enroll)");
+                    } else {
+                        println!("❌ {status}: {body}");
+                    }
+                }
+                AdminCommands::Login { email, password, gateway } => {
+                    let resp = client
+                        .post(format!("{gateway}/auth/login"))
+                        .json(&serde_json::json!({
+                            "email": email, "password": password,
+                        }))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if !status.is_success() {
+                        println!("❌ {status}: {body}");
+                        return Ok(());
+                    }
+                    if body.get("mfa_required").and_then(|v| v.as_bool()) == Some(true) {
+                        let uid = body
+                            .get("user_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        println!("🔐 MFA required");
+                        println!("   user_id: {uid}");
+                        println!("   POST /auth/mfa/login → {{user_id, code}} ile devam et.");
+                    } else if let Some(token) = body.get("token").and_then(|v| v.as_str()) {
+                        let exp = body
+                            .get("expires_at")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        println!("✅ logged in as {email}");
+                        println!("   token: {token}");
+                        println!("   export XIRA_SESSION_TOKEN={token}");
+                        println!("   expires_at: {exp}");
+                    } else {
+                        println!("? unexpected response: {body}");
+                    }
+                }
+            }
+        }
 
         Commands::System(sub) => match sub {
             SystemCommands::Init => {
