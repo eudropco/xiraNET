@@ -73,10 +73,30 @@ jobs:
       - name: Test (workspace, all targets)
         run: cargo test --workspace --all-targets
 
+  config-gate:
+    name: Config validation gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cfg-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cfg-
+      - name: Build binary
+        run: cargo build --bin xiranet
+      - name: Validate xiranet.toml (deep semantic check)
+        run: cargo run --bin xiranet -- system validate --config xiranet.toml
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [test, clippy, fmt]
+    needs: [test, clippy, fmt, config-gate]
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4

@@ -1061,50 +1061,202 @@ health_endpoint = "/health"
         Commands::Doctor { gateway } => {
             println!("🩺 XIRA Doctor\n");
 
-            // Port check
-            print!("  Port 9000:     ");
-            match std::net::TcpStream::connect("127.0.0.1:9000") {
-                Ok(_) => println!("🟢 IN USE (gateway running)"),
-                Err(_) => println!("⚪ AVAILABLE"),
+            let mut errors: Vec<String> = Vec::new();
+            let mut warnings: Vec<String> = Vec::new();
+
+            // ─── Environment ─────────────────────────────────────────
+            println!("Environment:");
+            print!("  XIRA_SECRETS_KEY:  ");
+            match std::env::var("XIRA_SECRETS_KEY") {
+                Ok(v) if v.len() >= 32 => println!("🟢 set ({} bytes)", v.len()),
+                Ok(v) => {
+                    println!("🔴 too short ({} bytes, need >= 32)", v.len());
+                    errors.push("XIRA_SECRETS_KEY is set but too short".into());
+                }
+                Err(_) => {
+                    println!("🟡 not set — MFA seed'leri düz metin saklanır");
+                    warnings.push("XIRA_SECRETS_KEY not set (MFA at-rest encryption disabled)".into());
+                }
+            }
+            print!("  XIRA_DB_PATH:      ");
+            match std::env::var("XIRA_DB_PATH") {
+                Ok(p) => println!("🟢 {p}"),
+                Err(_) => println!("⚪ default (data/xiranet.db)"),
+            }
+            print!("  XIRA_API_KEY:      ");
+            match std::env::var("XIRA_API_KEY") {
+                Ok(_) => println!("🟢 set"),
+                Err(_) => println!("⚪ not set (CLI komutları --key gerektirir)"),
             }
 
-            // Config check
-            print!("  Config:        ");
+            // ─── Config ──────────────────────────────────────────────
+            println!("\nConfig:");
+            print!("  xiranet.toml:      ");
             if std::path::Path::new("xiranet.toml").exists() {
-                println!("🟢 Found (xiranet.toml)");
+                println!("🟢 found");
+                match crate::config::XiraConfig::load("xiranet.toml") {
+                    Ok(cfg) => {
+                        let r = cfg.validate();
+                        if r.ok() {
+                            if r.warnings.is_empty() {
+                                println!("  Validation:        🟢 clean");
+                            } else {
+                                println!(
+                                    "  Validation:        🟡 {} warning(s)",
+                                    r.warnings.len()
+                                );
+                                for w in &r.warnings {
+                                    println!("    • {w}");
+                                    warnings.push(w.clone());
+                                }
+                            }
+                        } else {
+                            println!(
+                                "  Validation:        🔴 {} blocking error(s)",
+                                r.errors.len()
+                            );
+                            for e in &r.errors {
+                                println!("    • {e}");
+                                errors.push(e.clone());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  Validation:        🔴 parse error: {e}");
+                        errors.push(format!("config parse: {e}"));
+                    }
+                }
             } else {
-                println!("🔴 Not found (run: xira init)");
+                println!("🔴 not found (run: xira system init)");
+                errors.push("xiranet.toml not found".into());
             }
 
-            // SQLite check
-            print!("  SQLite:        ");
-            if std::path::Path::new("data/xiranet.db").exists() {
-                println!("🟢 Found (data/xiranet.db)");
+            // ─── Filesystem ──────────────────────────────────────────
+            println!("\nFilesystem:");
+            let db_path = std::env::var("XIRA_DB_PATH")
+                .unwrap_or_else(|_| "data/xiranet.db".to_string());
+            print!("  SQLite ({db_path}): ");
+            if std::path::Path::new(&db_path).exists() {
+                // Write check
+                match std::fs::OpenOptions::new().append(true).open(&db_path) {
+                    Ok(_) => println!("🟢 writable"),
+                    Err(_) => {
+                        println!("🔴 exists but not writable");
+                        errors.push(format!("{db_path} not writable"));
+                    }
+                }
             } else {
-                println!("⚪ Will be created on first run");
+                let parent = std::path::Path::new(&db_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                if parent.exists() {
+                    println!("⚪ will be created on first run");
+                } else {
+                    println!("🟡 parent dir missing: {}", parent.display());
+                    warnings.push(format!("DB parent dir missing: {}", parent.display()));
+                }
             }
-
-            // Gateway connectivity
-            print!("  Gateway API:   ");
-            match reqwest::Client::new()
-                .get(format!("{gateway}/xira/health"))
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => println!("🟢 Healthy"),
-                Ok(resp) => println!("🟡 Responding (HTTP {})", resp.status()),
-                Err(_) => println!("🔴 Unreachable ({gateway})"),
-            }
-
-            // Logs directory
-            print!("  Logs dir:      ");
+            print!("  logs/:             ");
             if std::path::Path::new("logs").exists() {
-                println!("🟢 Found");
+                println!("🟢 found");
             } else {
-                println!("⚪ Will be created on first run");
+                println!("⚪ will be created on first run");
             }
 
-            println!("\n  Version:       v{}", env!("CARGO_PKG_VERSION"));
+            // ─── Live gateway ────────────────────────────────────────
+            println!("\nLive gateway ({gateway}):");
+            print!("  Port reachable:    ");
+            let port = gateway
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(9000);
+            let host = gateway
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .rsplit_once(':')
+                .map(|(h, _)| h.to_string())
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+            match std::net::TcpStream::connect_timeout(
+                &format!("{host}:{port}").parse().unwrap_or_else(|_| {
+                    "127.0.0.1:0".parse().unwrap()
+                }),
+                std::time::Duration::from_secs(2),
+            ) {
+                Ok(_) => println!("🟢 yes"),
+                Err(_) => {
+                    println!("🔴 no — gateway not running?");
+                    warnings.push(format!("{gateway} not reachable"));
+                }
+            }
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .unwrap();
+
+            print!("  /health:           ");
+            match client.get(format!("{gateway}/health")).send().await {
+                Ok(resp) if resp.status().is_success() => println!("🟢 200"),
+                Ok(resp) => println!("🟡 HTTP {}", resp.status()),
+                Err(_) => println!("🔴 unreachable"),
+            }
+
+            print!("  /metrics:          ");
+            match client.get(format!("{gateway}/metrics")).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let body = resp.text().await.unwrap_or_default();
+                    let has_audit = body.contains("xiranet_auth_rejects_total")
+                        && body.contains("xiranet_ssrf_rejects_total")
+                        && body.contains("xiranet_session_events_total");
+                    if has_audit {
+                        println!("🟢 v3.0 audit counters present");
+                    } else {
+                        println!(
+                            "🟡 200 but missing v3.0 counters (stale binary? size={})",
+                            body.len()
+                        );
+                        warnings.push("metrics endpoint lacks v3.0 audit counters".into());
+                    }
+                }
+                Ok(resp) => println!("🟡 HTTP {}", resp.status()),
+                Err(_) => println!("🔴 unreachable"),
+            }
+
+            print!("  Admin auth:        ");
+            // No-key request must 401 (K3 fix verification)
+            match client.get(format!("{gateway}/xira/services")).send().await {
+                Ok(resp) if resp.status().as_u16() == 401 => {
+                    println!("🟢 no-key → 401 (constant-time API key compare active)")
+                }
+                Ok(resp) => {
+                    println!("🔴 no-key → HTTP {} (expected 401)", resp.status());
+                    errors.push(format!(
+                        "admin endpoint no-key returned {} (security regression)",
+                        resp.status()
+                    ));
+                }
+                Err(_) => println!("⚪ gateway not running"),
+            }
+
+            // ─── Version ──────────────────────────────────────────────
+            println!("\n  xiranet:           v{}", env!("CARGO_PKG_VERSION"));
+
+            // ─── Summary ──────────────────────────────────────────────
+            println!();
+            if errors.is_empty() && warnings.is_empty() {
+                println!("✅ All checks passed.");
+            } else {
+                if !errors.is_empty() {
+                    println!("❌ {} error(s) — gateway will not start or is misbehaving.", errors.len());
+                }
+                if !warnings.is_empty() {
+                    println!("⚠️  {} warning(s) — review before production.", warnings.len());
+                }
+                if !errors.is_empty() {
+                    std::process::exit(1);
+                }
+            }
         }
 
         Commands::Export {

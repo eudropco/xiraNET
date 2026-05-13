@@ -505,6 +505,54 @@ Bu sürüm geniş bir security/correctness audit'inden çıktı. Tam liste için
 - `rust-toolchain.toml`: 1.88 pin.
 - `let _ = storage.*` silent fail → `tracing::warn`.
 
+## Threat model
+
+xiraNET'in nelere koruma sağladığını ve **NEYE SAĞLAMADIĞINI** açıkça yazmak, kullanıcının doğru yere yatırım yapmasını sağlar.
+
+### Yes — bunlar adres alınmıştır
+
+| Tehdit | Karşı önlem |
+|--------|-------------|
+| Admin API key brute-force | Constant-time compare (`subtle::ConstantTimeEq`), `xiranet_auth_rejects_total{wrong_key}` counter, opsiyonel rate limit |
+| Cron / service register SSRF | `url_guard` strict/upstream mode, cloud metadata IP'leri her zaman block |
+| Session token theft sonrası replay | Token SHA-256 hashed-at-rest, logout-all force invalidate, `xiranet_session_events_total` |
+| JWT default-secret deployments | Boot-time guard (`xira system validate` ve `Serve`), known-default list, min 32-byte HMAC, RS256 PEM parse zorunluluğu |
+| MFA seed leak (DB backup) | `SecretBox` AES-256-GCM at-rest, `XIRA_SECRETS_KEY` ile envelope |
+| CORS misconfiguration → cross-origin admin | `allow_any_origin` kaldırıldı; explicit `[cors].allowed_origins` zorunlu |
+| Algorithm confusion (alg=none, HS→RS) | `validation.algorithms` tek değere pin |
+| WAF UTF-8 bypass (\xff prefix) | Lossy UTF-8 inspection |
+| SQLi false positives (email/markdown) | Pattern'ler SQL keyword bağlamı yakınında; standalone `;`/`--`/`@` match etmez |
+| Audit trail silent loss | `tracing::warn` + `xiranet_db_persist_errors_total{table}` counter |
+| Container privilege escalation | Non-root user (uid 10001), `cap_drop ALL` + `NET_BIND_SERVICE` only |
+| Healthcheck'te credential leak | Public `/health` endpoint, API key gerektirmiyor |
+| Privilege change replay attack | Role değişimi `invalidate_all` tetikler — eski token'lar invalidate |
+| Boot ile uygun olmayan config | `XiraConfig::validate()` blocking errors → process exit |
+
+### No — bunlar adres alınmamıştır (dürüstlük)
+
+| Tehdit | Neden / işaret |
+|--------|----------------|
+| Distributed DDoS | Tek-instance rate limit yetmez; CDN/Cloudflare/AWS Shield seviyesinde absorb gerekir |
+| Process memory dump | Loaded SecretBox + session map plaintext bellekte; hardware enclave değiliz |
+| Side-channel: cache timing, Spectre vb. | Rust + Tokio kontrol etmiyor; AWS Nitro/SEV seviyesi gerekir |
+| DNS rebinding | `url_guard` resolve + check arası kısa pencere açık; tam koruma için custom resolver gerekir |
+| Supply chain (crate compromise) | `cargo audit` advisory-only; `cargo-vet` veya `cargo-deny` gibi policy yok |
+| Cross-replica session sync | Sessions SQLite-persistent ama tek node; multi-node deploy session-sticky LB gerektirir |
+| TOTP secret derive (HOTP counter) | RFC 6238 ±1 step window kullanılır; ±2/±3 yapılabilir ama brute-force window artar |
+| Rate-limit bypass (X-Forwarded-For spoof) | Peer IP kullanılır; arkada proxy varsa `X-Forwarded-For`'a güvenilmemeli (ilk-hop) |
+| RBAC `Custom(name)` hiyerarşi | Custom rol explicit eşleşme — hierarchy'e dahil değil; permission grants ile kullanılmalı |
+| Plugin sandbox | `xira_plugin_create` çağırdığı plugin host process'i ile aynı yetkilere sahip — code review gerekir |
+| Browser cookie auth | Session token Authorization header / X-Session-Token ile alınır; cookie + CSRF protect mevcut değil |
+| Audit log tampering | SQLite tablo herhangi biri DB'ye yazma erişimi olursa silebilir; append-only log değil |
+
+### Operasyonel öneriler
+
+1. **Pre-deploy**: `xira system validate --config xiranet.toml` CI gate'i.
+2. **Boot zamanında**: `xira system doctor` — env vars, file permissions, live gateway health.
+3. **Sürekli**: Grafana "xiraNET — Security & Audit" dashboard'ı izle.
+4. **`XIRA_SECRETS_KEY` rotation**: yapılmıyor; MFA seed'ler tek key ile sealed, key değişirse mevcut seed'ler kayıp.
+5. **`cargo audit`**: CI'da koşar; advisory için PR aç, otomatik update yok.
+
 ## Lisans
 
 MIT OR Apache-2.0
