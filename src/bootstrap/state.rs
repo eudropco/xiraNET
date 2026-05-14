@@ -139,10 +139,11 @@ impl AppState {
             xira_config.alerting.on_service_down,
             xira_config.alerting.on_service_up,
         );
-        let rate_limiter = RateLimiter::with_options(
+        let rate_limiter = RateLimiter::with_trusted_proxies(
             xira_config.rate_limit.max_requests,
             xira_config.rate_limit.window_secs,
             xira_config.rate_limit.trust_xff,
+            &xira_config.rate_limit.trusted_proxies,
         );
 
         // ─── Plugins ───────────────────────────────────────────────
@@ -381,6 +382,7 @@ fn spawn_config_sync(
             let config = shared_config.read().await;
             rate_limiter.set_limits(config.rate_limit.max_requests, config.rate_limit.window_secs);
             rate_limiter.set_trust_xff(config.rate_limit.trust_xff);
+            rate_limiter.set_trusted_proxies(&config.rate_limit.trusted_proxies);
             response_cache.set_enabled(config.cache.enabled);
             response_cache.set_ttl_secs(config.cache.ttl_secs);
             cb_manager.update_config(

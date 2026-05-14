@@ -231,10 +231,20 @@ pub struct RateLimitConfig {
     /// Per-route overrides: path prefix → max requests per window
     #[serde(default)]
     pub routes: std::collections::HashMap<String, u32>,
-    /// Reverse proxy/LB arkasındaysa X-Forwarded-For ilk hop'unu client IP
-    /// say. Doğrudan public exposure'da AÇILMAZ — XFF spoof'lanabilir.
+    /// **Deprecated** — `trusted_proxies` boş değilse görmezden gelinir.
+    /// Geriye dönük uyumluluk için tutuluyor: `trust_xff = true` + boş
+    /// `trusted_proxies` durumu, herhangi bir peer'dan gelen XFF'in ilk
+    /// hop'unu kabul eder. Bu pattern XFF spoof'a açıktır; yeni deployment'lar
+    /// `trusted_proxies` listesini kullanmalı.
     #[serde(default)]
     pub trust_xff: bool,
+    /// Reverse proxy/LB'lerin IP veya CIDR listesi (örn. `["10.0.0.0/8",
+    /// "192.168.1.5"]`). Liste doluysa: peer_addr listedeyse XFF chain
+    /// sağdan-sola gezilir, ilk untrusted IP client kabul edilir;
+    /// peer_addr listede değilse XFF görmezden gelinir ve peer_addr
+    /// kullanılır. Liste boşsa `trust_xff` flag'i geçerli (legacy mode).
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for RateLimitConfig {
@@ -244,6 +254,7 @@ impl Default for RateLimitConfig {
             window_secs: 60,
             routes: std::collections::HashMap::new(),
             trust_xff: false,
+            trusted_proxies: Vec::new(),
         }
     }
 }

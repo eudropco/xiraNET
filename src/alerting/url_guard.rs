@@ -9,10 +9,16 @@
 /// - Unspecified (0.0.0.0, ::)
 /// - Multicast / broadcast / reserved aralıklar
 ///
-/// DNS hostname'leri için `tokio::net::lookup_host` ile resolve edip
-/// dönen tüm IP'leri kontrol ederiz. Bu, DNS rebinding'e karşı tam koruma
-/// vermez (IP, resolve ile reqwest connect arasında değişebilir) ama temel
-/// SSRF saldırılarını durdurur. Tam koruma için custom resolver gerekir.
+/// DNS hostname'leri için `tokio::net::lookup_host` ile resolve edip dönen tüm
+/// IP'leri kontrol ederiz.
+///
+/// `validate_*` ailesi (yalnızca doğrula, IP pin'leme yok) klasik TOCTOU/DNS
+/// rebinding'e açıktır — resolve sonrası IP değişebilir. Bu yüzden
+/// outbound/upstream connection'lar için `pin_outbound_url` / `pin_upstream_url`
+/// kullanılmalı: dönen `PinnedUrl::build_client(...)` reqwest'i
+/// `resolve_to_addrs` ile pin'lenmiş IP'ye bağlar, connect sırasında DNS
+/// yeniden çağrılmaz. `validate_*` ailesi sadece input gating (örn. config
+/// validation, admin form pre-flight) için tutulur.
 use std::net::IpAddr;
 
 #[derive(Debug, thiserror::Error)]

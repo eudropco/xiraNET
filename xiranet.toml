@@ -46,6 +46,14 @@ on_service_up = true
 [rate_limit]
 max_requests = 100
 window_secs = 60
+# Trusted reverse proxy / LB IP veya CIDR listesi. Liste doluysa XFF chain
+# sağdan-sola gezilir, ilk untrusted hop client IP'si kabul edilir. Liste
+# boşsa aşağıdaki `trust_xff` flag'i geçerlidir (legacy / spoof-prone).
+# trusted_proxies = ["10.0.0.0/8", "192.168.1.5"]
+#
+# Legacy mode — sadece doğrudan public exposure ALTINDAKİ proxy varsa
+# açılmalı; aksi halde X-Forwarded-For client tarafından spoof edilebilir.
+trust_xff = false
 
 [cache]
 enabled = true

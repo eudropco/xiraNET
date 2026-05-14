@@ -69,11 +69,43 @@ cp target/release/xiranet ~/.local/bin/xira
 ```bash
 # MFA seed'leri ve hassas materyallerin at-rest şifrelenmesi için (>= 32 byte).
 # Ayarlanmazsa MFA/identity ÇALIŞIR ama seed'ler düz metin saklanır (warn).
+#
+# **Önerilen — 64 hex char (raw 32-byte key, KDF yok, en yüksek entropy):**
 export XIRA_SECRETS_KEY="$(openssl rand -hex 32)"
+
+# Alternatif — passphrase modu (Argon2id KDF, m=19MB t=2 p=1). Bu modda
+# XIRA_SECRETS_SALT da set edilmeli; salt değişimi = key rotation.
+# export XIRA_SECRETS_KEY="long-passphrase-min-32-chars-..."
+# export XIRA_SECRETS_SALT="rotation-handle-min-16-chars"
 
 # DB yolunu özelleştirmek için (opsiyonel)
 export XIRA_DB_PATH=/var/lib/xira/xiranet.db
 ```
+
+### Mevcut deployment'tan upgrade — MFA migration uyarısı
+
+v3.0 patch'lerinde `SecretBox` KDF'i Argon2id'e geçti. Eski sürümlerde aynı
+`XIRA_SECRETS_KEY` SHA-256 üzerinden derive edilmiş AES key üretiyordu; yeni
+sürümde derivation şu mantığa düştü:
+
+- `XIRA_SECRETS_KEY` 64 ASCII hex char ise: **raw 32-byte key** (KDF yok).
+  Önceki SHA-256 davranışından farklı; aynı hex string artık doğrudan key.
+- Aksi halde: Argon2id KDF + `XIRA_SECRETS_SALT`.
+
+**Üretimde live bir deployment'ı upgrade ederken**: mevcut MFA seed'leri eski
+key ile sealed durumda. Yeni binary açıldığında decrypt başarısız olur ve
+sessizce plaintext fallback yapılır (boot warning log'a girer). Güvenli
+upgrade sırası:
+
+1. Mevcut kullanıcılara "MFA recovery gerekecek" duyurusu yap.
+2. Yeni binary'yi `XIRA_SECRETS_KEY` aynı kalacak şekilde deploy et.
+3. Admin endpoint'inden tüm MFA-enabled hesapları `/auth/admin/users/{id}/mfa/disable`
+   ile reset et (audit log otomatik yazılır).
+4. Kullanıcılar tekrar `/auth/mfa/enroll` çağırır; yeni seed Argon2id-derived
+   key ile sealed yazılır.
+
+Tek-shot operasyonel sınır; ileride çoklu key versioning eklenince bu adım
+kaldırılacak.
 
 ## Hızlı Başlangıç
 

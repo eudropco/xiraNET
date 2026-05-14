@@ -31,7 +31,6 @@ fn print_banner(host: &str, port: u16, features: &[&str]) {
     📈 Metrics:    http://{}:{}/metrics
     🏥 Health:     http://{}:{}/xira/health
     
-    📦 Crates: common | security | auth | ops | flow | gateway
     🔌 Features: {}
 "#,
         env!("CARGO_PKG_VERSION"),

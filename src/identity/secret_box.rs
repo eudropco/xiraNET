@@ -37,40 +37,75 @@ pub struct SecretBox {
 impl SecretBox {
     /// `XIRA_SECRETS_KEY` ortam değişkeninden initialize et.
     ///
-    /// Variant 1 (recommended): `XIRA_SECRETS_KEY` = 64 hex char (32 byte raw key).
-    /// `openssl rand -hex 32` ile üretilir; SHA-256/Argon2 KDF kullanılmaz, doğrudan
-    /// AES-256 key. En yüksek entropy.
-    ///
-    /// Variant 2: `XIRA_SECRETS_KEY` = passphrase (>= 32 char). Argon2id KDF ile
-    /// 32-byte derive edilir (m=19456, t=2, p=1, fixed salt). Deterministic — aynı
-    /// passphrase → aynı key; rotation için passphrase değiştirmek yetmez,
-    /// XIRA_SECRETS_SALT da set edilmeli (key rotation flow için altta).
+    /// Auto-detection (backward compat): 64 ASCII hex karakter → `from_raw_hex`
+    /// (yüksek entropy, doğrudan AES-256 key). Aksi halde `from_kdf` (Argon2id).
+    /// Yeni kod için niyetinizi explicit beyan etmeniz tercih edilir:
+    /// `SecretBox::from_raw_hex(hex)` veya `SecretBox::from_kdf(passphrase)`.
+    /// Auto-detect, gözünüzden kaçan bir char fark'ında sessizce mode değiştirir
+    /// → tehlikeli silent behavior.
     pub fn from_env() -> Result<Self, SecretBoxError> {
         let raw = std::env::var("XIRA_SECRETS_KEY").map_err(|_| SecretBoxError::MissingKey)?;
-        Self::from_passphrase(&raw)
+        if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
+            Self::from_raw_hex(&raw)
+        } else {
+            Self::from_kdf(&raw)
+        }
     }
 
     /// 64 hex char ise raw key olarak kabul (yüksek entropy), aksi halde
     /// Argon2id KDF ile 32-byte derive.
+    ///
+    /// **Deprecated semantic**: bu fonksiyon iki mode'u silent şekilde
+    /// switch'liyor — caller'ın niyeti tip imzasında görünmüyor. Yeni kod
+    /// `from_raw_hex` veya `from_kdf` kullanmalı. Backward compat için tutuluyor.
     pub fn from_passphrase(pass: &str) -> Result<Self, SecretBoxError> {
         if pass.len() < 32 {
             return Err(SecretBoxError::WeakKey(pass.len()));
         }
-        // Variant 1: 64 hex char → raw 32-byte key
         if pass.len() == 64 && pass.chars().all(|c| c.is_ascii_hexdigit()) {
-            let mut key_bytes = [0u8; 32];
-            for (i, byte) in key_bytes.iter_mut().enumerate() {
-                let h = &pass[i * 2..i * 2 + 2];
-                *byte = u8::from_str_radix(h, 16)
-                    .map_err(|e| SecretBoxError::DecryptionFailed(format!("hex parse: {e}")))?;
-            }
-            let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-            return Ok(Self {
-                cipher: Arc::new(Aes256Gcm::new(key)),
-            });
+            return Self::from_raw_hex(pass);
         }
-        // Variant 2: passphrase → Argon2id KDF
-        Self::from_passphrase_argon2(pass)
+        Self::from_kdf(pass)
+    }
+
+    /// 32-byte raw key'i 64 char hex string'inden initialize et — KDF YOK.
+    /// `openssl rand -hex 32` çıktısı veya benzer high-entropy kaynaktan
+    /// gelmeli. Niyet: "elimde zaten yüksek entropy 256-bit key var, doğrudan
+    /// AES-256 başlat." Yanlış input → açıkça hata.
+    pub fn from_raw_hex(hex: &str) -> Result<Self, SecretBoxError> {
+        if hex.len() != 64 {
+            return Err(SecretBoxError::InvalidCiphertext(format!(
+                "from_raw_hex requires exactly 64 hex chars (got {})",
+                hex.len()
+            )));
+        }
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SecretBoxError::InvalidCiphertext(
+                "from_raw_hex requires ASCII hex digits".into(),
+            ));
+        }
+        let mut key_bytes = [0u8; 32];
+        for (i, byte) in key_bytes.iter_mut().enumerate() {
+            let h = &hex[i * 2..i * 2 + 2];
+            *byte = u8::from_str_radix(h, 16)
+                .map_err(|e| SecretBoxError::InvalidCiphertext(format!("hex parse: {e}")))?;
+        }
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        Ok(Self {
+            cipher: Arc::new(Aes256Gcm::new(key)),
+        })
+    }
+
+    /// Passphrase'i Argon2id ile 32-byte key'e derive et — KDF her zaman çalışır.
+    /// Niyet: "elimde human-memorable / orta entropy bir string var, KDF cost'u
+    /// uygula." 64 hex char string yollasanız bile KDF tetiklenir
+    /// (`from_raw_hex` davranışı YOK). Salt için XIRA_SECRETS_SALT env veya
+    /// default — salt değişimi key rotation demektir.
+    pub fn from_kdf(passphrase: &str) -> Result<Self, SecretBoxError> {
+        if passphrase.len() < 32 {
+            return Err(SecretBoxError::WeakKey(passphrase.len()));
+        }
+        Self::from_passphrase_argon2(passphrase)
     }
 
     /// Argon2id KDF — passphrase'i 32-byte key'e dönüştür. Salt deterministic
@@ -167,5 +202,42 @@ mod tests {
             bytes[mid] = if bytes[mid] == b'A' { b'B' } else { b'A' };
         }
         assert!(sb.open(&sealed).is_err());
+    }
+
+    /// `from_raw_hex` strict: 64 hex char, başka her şey reject.
+    #[test]
+    fn from_raw_hex_strict() {
+        // 64 hex char → OK
+        let key = "a".repeat(64);
+        assert!(SecretBox::from_raw_hex(&key).is_ok());
+        // 63 hex → reject
+        assert!(SecretBox::from_raw_hex(&"a".repeat(63)).is_err());
+        // 64 char ama hex değil
+        assert!(SecretBox::from_raw_hex(&"z".repeat(64)).is_err());
+        // 65 hex → reject
+        assert!(SecretBox::from_raw_hex(&"a".repeat(65)).is_err());
+    }
+
+    /// `from_kdf` her zaman KDF — 64 hex string passphrase olarak işlem görür.
+    /// `from_raw_hex`'in aynı input'a verdiği key ile EŞLEŞMEMELİ; yoksa
+    /// API ayrımının anlamı yok.
+    #[test]
+    fn from_kdf_differs_from_raw_hex_on_same_input() {
+        let hex_pass = "a".repeat(64);
+        let sb_raw = SecretBox::from_raw_hex(&hex_pass).unwrap();
+        let sb_kdf = SecretBox::from_kdf(&hex_pass).unwrap();
+        let plaintext = b"sentinel";
+        let sealed_by_raw = sb_raw.seal(plaintext).unwrap();
+        // KDF instance, raw key ile sealed ciphertext'i AÇMAMALI — farklı key.
+        assert!(
+            sb_kdf.open(&sealed_by_raw).is_err(),
+            "from_kdf must derive a different key than from_raw_hex (silent-mode separation)"
+        );
+    }
+
+    /// `from_kdf` çok kısa passphrase reject.
+    #[test]
+    fn from_kdf_weak_passphrase_rejected() {
+        assert!(SecretBox::from_kdf("short").is_err());
     }
 }
