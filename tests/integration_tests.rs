@@ -1647,6 +1647,84 @@ mod adversarial_tests {
         );
     }
 
+    /// DNS rebinding mock — PinnedUrl gerçekten bypass ediyor mu?
+    ///
+    /// Senaryo: "evil-host.example" gerçek DNS'te attacker IP'lerine resolve
+    /// olur. Biz `pin_upstream_url`'i atlayıp manuel PinnedUrl üretiyoruz
+    /// (host = "evil-host.example", ip = 127.0.0.1:test_port). build_client
+    /// ile reqwest::Client kur. Request `http://evil-host.example:port/`'a
+    /// gönderildiğinde reqwest, **sistem DNS'i sormaz**; bizim verdiğimiz
+    /// 127.0.0.1:port'a bağlanır → lokal mock listener cevap verir.
+    ///
+    /// Bu doğrudan TOCTOU mitigation kanıtı: resolve süreci geçtikten sonra
+    /// "host"un başka IP'ye resolve olması (rebinding) HTTP connection'ı
+    /// etkilemez.
+    #[tokio::test]
+    async fn pinned_url_dns_rebinding_mitigation() {
+        use std::net::IpAddr;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use xiranet::alerting::url_guard::PinnedUrl;
+
+        // Lokal mock HTTP listener
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bound = listener.local_addr().unwrap();
+        let port = bound.port();
+
+        let server_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Minimum HTTP parse + cevap
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            let body = b"PINNED_OK";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            let _ = socket.flush().await;
+        });
+
+        // Pin: host = sahte (sistem DNS'te tanımsız), ip = lokal mock
+        let pinned = PinnedUrl {
+            url: format!("http://evil-host.example.test.invalid:{port}/"),
+            host: "evil-host.example.test.invalid".to_string(),
+            ip: IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            port,
+        };
+
+        let client = pinned.build_client(5).expect("client build");
+
+        // Request — sistem DNS bu host'u resolve edemez (`.invalid` TLD
+        // RFC 2606), ama resolve_to_addrs override aktif → mock'a düşer.
+        let resp = client.get(&pinned.url).send().await.expect("send");
+        assert_eq!(resp.status(), 200);
+        let body = resp.text().await.expect("body");
+        assert_eq!(body, "PINNED_OK", "must hit pinned IP, not system DNS");
+
+        server_task.await.unwrap();
+    }
+
+    /// Negative test — `resolve_to_addrs` olmadan aynı host system DNS'e
+    /// düşer, `.invalid` TLD bağlanamaz. Test kontrolü: bizim mock'ın
+    /// gerçekten override'a bağlı olduğunu doğrular.
+    #[tokio::test]
+    async fn pinned_url_without_resolve_override_fails() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let result = client
+            .get("http://evil-host.example.test.invalid:1/")
+            .send()
+            .await;
+        assert!(
+            result.is_err(),
+            ".invalid TLD must fail without resolve_to_addrs override (sanity check)"
+        );
+    }
+
     /// WAF rule ID multi-node coherence — bus event id local'e AYNI yazılır.
     /// Eski sürüm: Node A id=5 publish, Node B apply'da yeni atomic id=12 alır.
     /// Yeni: Node B `apply_add_pattern_with_id(5, ...)` ile aynı id.

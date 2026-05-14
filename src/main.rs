@@ -2,49 +2,16 @@ use actix_web::{middleware::DefaultHeaders, web, App, HttpServer};
 use std::sync::Arc;
 use std::time::Instant;
 
-// ═══ XIRA Platform v3.0 imports ═══
-//
-// Architecture: domain crates compile independently (cargo test --workspace)
-// but hub still uses its own copies for runtime type compatibility.
-// Future: hub will re-export crate types via trait-based abstraction.
-//
-use xiranet::automation::cron::CronScheduler;
-use xiranet::automation::event_bus::EventBus;
-use xiranet::automation::workflows::WorkflowEngine;
-use xiranet::datapipeline::pipeline::DataPipeline;
-use xiranet::dbgateway::proxy::DbProxy;
-use xiranet::dbgateway::query_firewall::QueryFirewall;
-use xiranet::deployment::feature_flags::FeatureFlagManager;
-use xiranet::deployment::releases::ReleaseManager;
-use xiranet::gateway::health_scoring::HealthScorer;
-use xiranet::identity::sessions::SessionManager;
-use xiranet::identity::users::UserManager;
-use xiranet::metrics::advanced::AdvancedMetrics;
-use xiranet::metrics::sla::SlaMonitor;
-use xiranet::middleware::audit_log::AuditLogger;
-use xiranet::middleware::bot_detect::BotDetector;
-use xiranet::middleware::waf::{Waf, WafMode};
-use xiranet::observability::incidents::IncidentManager;
-use xiranet::observability::log_aggregator::LogAggregator;
-use xiranet::observability::uptime::UptimePage;
-
-use xiranet::alerting::AlertManager;
+// v3 audit Yarı C #26: domain bootstrap bootstrap::AppState::init'e taşındı.
+// main.rs şu an sadece CLI dispatch + HttpServer route mount.
 use xiranet::cli::{Cli, Commands};
 use xiranet::config::XiraConfig;
 use xiranet::dashboard;
 use xiranet::gateway;
-use xiranet::gateway::cache::ResponseCache;
-use xiranet::gateway::circuit_breaker::CircuitBreakerManager;
-use xiranet::gateway::load_balancer::LoadBalancer;
-use xiranet::health;
 use xiranet::metrics;
 use xiranet::middleware::{
     auth::ApiKeyAuth, cors, ip_filter::IpFilter, jwt::JwtAuth, logger::RequestLogger,
-    rate_limit::RateLimiter,
 };
-use xiranet::plugins::{LoggingPlugin, PluginManager, SecurityHeadersPlugin};
-use xiranet::registry::storage::SqliteStorage;
-use xiranet::registry::ServiceRegistry;
 
 fn print_banner(host: &str, port: u16, features: &[&str]) {
     println!(
@@ -86,59 +53,8 @@ fn print_banner(host: &str, port: u16, features: &[&str]) {
 // binds_externally} so CLI `xira system validate` and the `Serve` boot path use the
 // same source of truth.
 
-fn start_runtime_config_sync(
-    shared_config: Arc<tokio::sync::RwLock<XiraConfig>>,
-    rate_limiter: RateLimiter,
-    response_cache: Arc<ResponseCache>,
-    cb_manager: CircuitBreakerManager,
-    alert_manager: AlertManager,
-    waf: Arc<Waf>,
-) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        let mut last_waf_patterns_hash: u64 = 0;
-
-        loop {
-            interval.tick().await;
-
-            let config = shared_config.read().await;
-            rate_limiter.set_limits(
-                config.rate_limit.max_requests,
-                config.rate_limit.window_secs,
-            );
-            rate_limiter.set_trust_xff(config.rate_limit.trust_xff);
-            response_cache.set_enabled(config.cache.enabled);
-            response_cache.set_ttl_secs(config.cache.ttl_secs);
-            cb_manager.update_config(
-                config.circuit_breaker.failure_threshold,
-                config.circuit_breaker.reset_timeout_secs,
-                config.circuit_breaker.half_open_max_requests,
-            );
-            alert_manager.update_config(
-                config.alerting.webhook_url.clone(),
-                config.alerting.enabled,
-                config.alerting.on_service_down,
-                config.alerting.on_service_up,
-            );
-
-            // WAF custom patterns hot-reload — değişiklik varsa yeniden compile et.
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            for p in &config.waf.custom_block_patterns {
-                p.hash(&mut h);
-            }
-            let new_hash = h.finish();
-            if new_hash != last_waf_patterns_hash {
-                last_waf_patterns_hash = new_hash;
-                waf.load_custom_patterns_from_strings(&config.waf.custom_block_patterns);
-                tracing::info!(
-                    "WAF custom patterns hot-reloaded ({} rule(s))",
-                    config.waf.custom_block_patterns.len()
-                );
-            }
-        }
-    });
-}
+// `start_runtime_config_sync` bootstrap::state::spawn_config_sync'a taşındı
+// (v3 audit Yarı C madde 26 — main.rs domain split).
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -192,302 +108,63 @@ async fn main() -> std::io::Result<()> {
                 ));
             }
 
-            // SQLite Storage (path from config or default)
-            let db_path =
-                std::env::var("XIRA_DB_PATH").unwrap_or_else(|_| "data/xiranet.db".to_string());
-            let storage = Arc::new(SqliteStorage::new(&db_path).expect("Failed to init SQLite"));
-
-            // Service Registry (SQLite entegrasyonlu)
-            let storage_arc = storage.clone();
-            let registry = ServiceRegistry::with_storage(storage);
-            registry.load_from_config(&xira_config.services);
+            // ═══ AppState — tüm Arc init burada (v3 audit Yarı C #26) ═══
+            // Eski sürüm 770 satırlık tanrı fonksiyonu idi; bootstrap::state'e
+            // taşındı. main.rs şu an sadece CLI dispatch + HttpServer wire.
+            let state =
+                match xiranet::bootstrap::AppState::init(xira_config.clone(), config.clone())
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(error = %e, "AppState init failed");
+                        return Err(e);
+                    }
+                };
+            let storage_arc = state.storage.clone();
+            let registry = state.registry.clone();
             let service_count = registry.count();
             tracing::info!("Loaded {} service(s)", service_count);
 
-            // Circuit Breaker Manager
-            let cb_manager = CircuitBreakerManager::new(
-                xira_config.circuit_breaker.failure_threshold,
-                xira_config.circuit_breaker.reset_timeout_secs,
-                xira_config.circuit_breaker.half_open_max_requests,
-            );
-
-            // Load Balancer
-            let load_balancer = LoadBalancer::new();
-
-            // Response Cache
-            let response_cache = Arc::new(ResponseCache::new(
-                xira_config.cache.max_entries,
-                xira_config.cache.ttl_secs,
-                xira_config.cache.enabled,
-            ));
-
-            // Alert Manager
-            let alert_manager = AlertManager::new(
-                xira_config.alerting.webhook_url.clone(),
-                xira_config.alerting.enabled,
-                xira_config.alerting.on_service_down,
-                xira_config.alerting.on_service_up,
-            );
-            let rate_limiter = RateLimiter::with_options(
-                xira_config.rate_limit.max_requests,
-                xira_config.rate_limit.window_secs,
-                xira_config.rate_limit.trust_xff,
-            );
-
-            // Plugin Manager
-            let plugin_manager = PluginManager::new(xira_config.plugins.enabled);
-            if xira_config.plugins.enabled {
-                plugin_manager.register(Arc::new(LoggingPlugin)).await;
-                plugin_manager
-                    .register(Arc::new(SecurityHeadersPlugin))
-                    .await;
-                plugin_manager
-                    .scan_directory(&xira_config.plugins.directory)
-                    .await;
-            }
-
-            // Config Hot-Reload
-            let shared_config = Arc::new(tokio::sync::RwLock::new(xira_config.clone()));
-            let config_path = config.clone();
-            xiranet::config::start_config_watcher(config_path, shared_config.clone());
-            // ═══ Multi-node bus (Phase 4.4/4.5) — Redis veya no-op ═══
-            let bus: Arc<dyn xiranet::bus::XiraBus> = match xira_config.bus.backend.as_str() {
-                "redis" => {
-                    match xiranet::bus::redis_bus::RedisBus::connect(&xira_config.bus.redis_url)
-                        .await
-                    {
-                        Ok(b) => {
-                            tracing::info!(
-                                "Multi-node bus: Redis connected ({})",
-                                xira_config.bus.redis_url
-                            );
-                            Arc::new(b)
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                error = %e,
-                                "Redis bus connect failed — falling back to no-op (single-node mode)"
-                            );
-                            Arc::new(xiranet::bus::NoOpBus)
-                        }
-                    }
-                }
-                _ => Arc::new(xiranet::bus::NoOpBus),
-            };
-
-            // ═══ v2.1.0 — Domain State (config-driven) ═══
-            let waf_mode = if xira_config.waf.mode == "detect_only" {
-                WafMode::DetectOnly
-            } else {
-                WafMode::Block
-            };
-            let waf = Arc::new(Waf::new(xira_config.waf.enabled, waf_mode));
-            waf.load_custom_patterns_from_strings(&xira_config.waf.custom_block_patterns);
-            waf.set_bus(bus.clone());
-
-            start_runtime_config_sync(
-                shared_config.clone(),
-                rate_limiter.clone(),
-                response_cache.clone(),
-                cb_manager.clone(),
-                alert_manager.clone(),
-                waf.clone(),
-            );
-            let bot_detector = Arc::new(BotDetector::new(
-                xira_config.bot_detection.enabled,
-                xira_config.bot_detection.block_bots,
-                xira_config.bot_detection.crawl_rate_limit,
-            ));
-            // Audit sink'leri (file JSONL ve/veya HTTP webhook) config'den kur.
-            let mut sinks: Vec<Arc<dyn xiranet::middleware::audit_sink::AuditSink>> = Vec::new();
-            if let Some(ref p) = xira_config.audit.file_path {
-                sinks.push(Arc::new(
-                    xiranet::middleware::audit_sink::FileSink::new(std::path::PathBuf::from(p)),
-                ));
-                tracing::info!("Audit file sink active: {}", p);
-            }
-            if let Some(ref u) = xira_config.audit.webhook_url {
-                let headers: Vec<(String, String)> = xira_config
-                    .audit
-                    .webhook_headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                sinks.push(Arc::new(
-                    xiranet::middleware::audit_sink::HttpSink::new(u.clone(), headers),
-                ));
-                tracing::info!("Audit HTTP sink active: {}", u);
-            }
-            let audit_dispatcher = if sinks.is_empty() {
-                None
-            } else {
-                Some(Arc::new(xiranet::middleware::audit_sink::AuditDispatcher::new(
-                    sinks,
-                    xira_config.audit.buffer_size,
-                )))
-            };
-            let audit_logger = Arc::new(AuditLogger::new_with_dispatcher(
-                Some(storage_arc.clone()),
-                true,
-                audit_dispatcher,
-            ));
-            let advanced_metrics = Arc::new(AdvancedMetrics::new());
-            let health_scorer = Arc::new(HealthScorer::new());
-            let sla_monitor = Arc::new(SlaMonitor::new());
-            // At-rest secret kasası: XIRA_SECRETS_KEY varsa MFA seed'leri şifreli saklanır.
-            let secret_box = match xiranet::identity::secret_box::SecretBox::from_env() {
-                Ok(sb) => {
-                    tracing::info!("Identity: at-rest encryption enabled (XIRA_SECRETS_KEY)");
-                    Some(sb)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Identity: at-rest encryption DISABLED — set XIRA_SECRETS_KEY (>= 32 bytes) to encrypt MFA seeds"
-                    );
-                    None
-                }
-            };
-            let user_manager = Arc::new(UserManager::with_storage_and_secrets(
-                storage_arc.clone(),
-                secret_box.clone(),
-            ));
-            let mut session_mgr = SessionManager::with_storage(
-                xira_config.identity.max_sessions_per_user,
-                storage_arc.clone(),
-            );
-            session_mgr.set_bus(bus.clone());
-            let session_manager = Arc::new(session_mgr);
-
-            // Authenticator — login ↔ session glue tip sisteminde garantili
-            // (v3 audit Yarı A, madde 9). Handler'lar artık ham token taşımıyor.
-            let authenticator = Arc::new(xiranet::identity::authenticator::Authenticator::new(
-                user_manager.clone(),
-                session_manager.clone(),
-            ));
-
-            // Bus subscriber — trait method üzerinden, ek instance gerek yok.
-            // NoOpBus için no-op; RedisBus için pub/sub task spawn.
-            let dispatcher = Arc::new(xiranet::bus::EventDispatcher::new(vec![
-                session_manager.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
-                waf.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
-            ]));
-            bus.spawn_subscriber(dispatcher);
-            tracing::info!("Bus subscriber registered (kind: {})", bus.kind());
-            let cron_scheduler = Arc::new(CronScheduler::with_storage(storage_arc.clone()));
-            let event_bus = Arc::new(EventBus::new(10000));
-            let workflow_engine = Arc::new(WorkflowEngine::new());
-            let log_aggregator = Arc::new(LogAggregator::new(
-                xira_config.observability.log_max_entries,
-            ));
-            let uptime_page = Arc::new(tokio::sync::RwLock::new(UptimePage::new()));
-            let incident_manager = Arc::new(IncidentManager::new());
-            let feature_flags = Arc::new(FeatureFlagManager::new());
-            let release_manager = Arc::new(ReleaseManager::new());
-            let db_proxy = Arc::new(DbProxy::new());
-            let query_firewall = Arc::new(QueryFirewall::new(500.0));
-            let data_pipeline = Arc::new(DataPipeline::new(1000, None));
-
-            // OAuth2/OIDC Gateway — introspection-tabanlı token doğrulama.
-            // Disabled iken bile struct yaratılır (admin endpoint 200 + enabled=false döner).
-            let oauth2_gateway = Arc::new(xiranet::middleware::oauth2_gateway::OAuth2Gateway::new(
-                xira_config.oauth2.enabled,
-                xira_config.oauth2.issuer_url.clone(),
-                xira_config.oauth2.introspection_url.clone(),
-                xira_config.oauth2.client_id.clone().unwrap_or_default(),
-                xira_config.oauth2.client_secret.clone().unwrap_or_default(),
-            ));
-
-            // Service Mesh + DockerDiscovery — config-driven, default off.
-            let service_mesh = Arc::new(xiranet::discovery::mesh::ServiceMesh::new(
-                xira_config.discovery.mesh_enabled,
-            ));
-            if xira_config.discovery.docker_enabled {
-                let docker = xiranet::discovery::mesh::DockerDiscovery::new(
-                    xira_config.discovery.docker_socket.clone(),
-                );
-                let registry_for_docker = registry.clone();
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-                        xira_config.discovery.interval_secs.max(10),
-                    ));
-                    loop {
-                        interval.tick().await;
-                        let svcs = docker.discover().await;
-                        for svc in svcs {
-                            if registry_for_docker.find_by_prefix(&svc.prefix).is_none() {
-                                let _ = registry_for_docker.register(
-                                    svc.name.clone(),
-                                    svc.prefix,
-                                    svc.upstream,
-                                    svc.health_endpoint,
-                                );
-                                tracing::info!("Docker discovery registered: {}", svc.name);
-                            }
-                        }
-                    }
-                });
-            }
-
-            // Start Cron Daemon
-            cron_scheduler.clone().start();
-
-            tracing::info!("v2.1.0 domains initialized: Identity, Automation, Observability, DB Gateway, Deployment, Pipeline");
-
-            // Health Checker (with v2.0 cross-domain feeds)
-            let health_registry = registry.clone();
-            let health_alerts = alert_manager.clone();
-            let health_interval = xira_config.health.interval_secs;
-            let health_timeout = xira_config.health.timeout_secs;
-            let health_uptime = uptime_page.clone();
-            let health_incidents = incident_manager.clone();
-            let health_sla = sla_monitor.clone();
-            tokio::spawn(async move {
-                health::start_health_checker(
-                    health_registry,
-                    health_alerts,
-                    health_interval,
-                    health_timeout,
-                    health_uptime,
-                    health_incidents,
-                    health_sla,
-                )
-                .await;
-            });
-
-            // ═══ Startup Self-Test ═══
-            {
-                let svc_list = registry.list_all();
-                if !svc_list.is_empty() {
-                    tracing::info!(
-                        "Running startup self-test for {} service(s)...",
-                        svc_list.len()
-                    );
-                    let test_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(3))
-                        .build()
-                        .unwrap();
-                    for svc in &svc_list {
-                        let health_url = format!("{}{}", svc.upstream, svc.health_endpoint);
-                        match test_client.get(&health_url).send().await {
-                            Ok(resp) if resp.status().is_success() => {
-                                tracing::info!("  ✔ {} ({}) — UP", svc.name, svc.upstream);
-                            }
-                            Ok(resp) => {
-                                tracing::warn!(
-                                    "  ✘ {} ({}) — HTTP {}",
-                                    svc.name,
-                                    svc.upstream,
-                                    resp.status()
-                                );
-                            }
-                            Err(_) => {
-                                tracing::warn!("  ✘ {} ({}) — UNREACHABLE", svc.name, svc.upstream);
-                            }
-                        }
-                    }
-                }
-            }
+            // Tüm aşağıdaki Arc init bootstrap::AppState::init içinde yapıldı.
+            // Kalan: state field'larını lokal değişkenlere clone'la (closure'da
+            // hareket için).
+            let cb_manager = state.cb_manager.clone();
+            let load_balancer = state.load_balancer.clone();
+            let response_cache = state.response_cache.clone();
+            let alert_manager = state.alert_manager.clone();
+            let rate_limiter = state.rate_limiter.clone();
+            let plugin_manager = state.plugin_manager.clone();
+            let shared_config = state.shared_config.clone();
+            let bus = state.bus.clone();
+            let waf = state.waf.clone();
+            let bot_detector = state.bot_detector.clone();
+            let audit_logger = state.audit_logger.clone();
+            let advanced_metrics = state.advanced_metrics.clone();
+            let health_scorer = state.health_scorer.clone();
+            let sla_monitor = state.sla_monitor.clone();
+            let user_manager = state.user_manager.clone();
+            let session_manager = state.session_manager.clone();
+            let authenticator = state.authenticator.clone();
+            let cron_scheduler = state.cron_scheduler.clone();
+            let event_bus = state.event_bus.clone();
+            let workflow_engine = state.workflow_engine.clone();
+            let log_aggregator = state.log_aggregator.clone();
+            let uptime_page = state.uptime_page.clone();
+            let incident_manager = state.incident_manager.clone();
+            let feature_flags = state.feature_flags.clone();
+            let release_manager = state.release_manager.clone();
+            let db_proxy = state.db_proxy.clone();
+            let query_firewall = state.query_firewall.clone();
+            let data_pipeline = state.data_pipeline.clone();
+            let oauth2_gateway = state.oauth2_gateway.clone();
+            let service_mesh = state.service_mesh.clone();
+            // `bus` ve diğerleri yalnız warning silinmesi için referans alındı.
+            let _ = (bus, audit_logger.clone(), event_bus.clone(), workflow_engine.clone(),
+                     log_aggregator.clone(), uptime_page.clone(), incident_manager.clone(),
+                     feature_flags.clone(), release_manager.clone(), db_proxy.clone(),
+                     query_firewall.clone(), data_pipeline.clone(), oauth2_gateway.clone(),
+                     service_mesh.clone(), cron_scheduler.clone());
 
             let start_time = Instant::now();
 

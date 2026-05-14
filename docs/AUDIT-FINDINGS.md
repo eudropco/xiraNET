@@ -109,11 +109,27 @@ PARTIAL (kısmen fix var, kalan iş tanımlı), CLOSED (test edilmiş + doküman
     (NoOpBus no-op, RedisBus pub/sub task). main.rs artık tek bus instance
     + tek subscriber → connection count 1×.
 
-## OPEN — Yarı C (NEXT PHASE)
+## CLOSED — Yarı C (tamamen kapandı)
 
-### v3.1.0 milestone
-26. **main.rs 914-line god function** — domain başına `bootstrap::*`
-    module ile split. Tüm test'lerin re-verify gerek (3-4 saat scope).
+### Done bu commit'te
+26. ✅ **main.rs 914-line god function** — `src/bootstrap/state.rs` ile
+    `AppState` struct + `AppState::init()` async fn. ~340 satır Arc init
+    kodu (storage, registry, cb_manager, load_balancer, cache, alert,
+    rate_limiter, plugin, shared_config, bus, waf, bot_detector,
+    audit_logger, advanced_metrics, health_scorer, sla, secret_box,
+    user_manager, session_manager, authenticator, bus subscriber,
+    cron, event_bus, workflow, log_aggregator, uptime, incident,
+    feature_flags, release, db_proxy, query_firewall, data_pipeline,
+    oauth2_gateway, service_mesh, docker_discovery spawn, health checker
+    spawn, startup self-test) bootstrap'a taşındı. main.rs **914 → 591**
+    satır (~35% küçülme). Yardımcı spawn fonksiyonları
+    (`spawn_config_sync`, `spawn_docker_discovery`, `spawn_health_checker`,
+    `run_startup_self_test`) state.rs içinde.
+29-ek. ✅ **DNS rebinding mock test** — `pinned_url_dns_rebinding_mitigation`:
+    lokal TCP listener, PinnedUrl elle kur (`.invalid` TLD host + 127.0.0.1
+    ip), `build_client(5)` → reqwest sistem DNS'i ignore eder, mock'a
+    bağlanır, "PINNED_OK" döner. Negative sanity: `resolve_to_addrs`
+    olmadan `.invalid` host'un sistem DNS'inde fail ettiğini doğrular.
 
 ### Kabul edilmiş trade-off
 - **Cron DNS rebinding window 60s** — PinCache TTL ile pure-tick-resolve
