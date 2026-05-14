@@ -1,5 +1,6 @@
 pub mod api_keys;
 pub mod audit_log;
+pub mod audit_sink;
 pub mod auth;
 pub mod bot_detect;
 pub mod cors;

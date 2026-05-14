@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+mod token_store;
+
 #[derive(Parser)]
 #[command(
     name = "xira",
@@ -276,8 +278,9 @@ pub enum AdminCommands {
     Users {
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
-        /// Session token (xira_tok_...) — SuperAdmin role gerekir
-        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        /// Session token (xira_tok_...). Boş bırakılırsa XIRA_SESSION_TOKEN env'ine,
+        /// o da yoksa `~/.config/xira/session` dosyasındaki kayda düşer.
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true, default_value = "")]
         token: String,
     },
     /// Set user role
@@ -287,39 +290,57 @@ pub enum AdminCommands {
         role: String,
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
-        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true, default_value = "")]
         token: String,
+        /// Onay sormadan uygula (otomasyon için)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Disable a user
     Disable {
         user_id: String,
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
-        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true, default_value = "")]
         token: String,
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Force logout all sessions of a user
     Logout {
         user_id: String,
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
-        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true, default_value = "")]
         token: String,
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// MFA recovery — disable MFA for a user
     MfaReset {
         user_id: String,
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
-        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true)]
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true, default_value = "")]
         token: String,
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
-    /// Login (email + password) and print session token
+    /// Login (email + password) and save session token to ~/.config/xira/session
     Login {
         email: String,
         password: String,
         #[arg(short, long, default_value = "http://localhost:9000")]
         gateway: String,
+    },
+    /// Forget saved session token
+    Logoff,
+    /// Show current saved session (no token leak — just path + gateway)
+    Whoami {
+        #[arg(short, long, default_value = "http://localhost:9000")]
+        gateway: String,
+        #[arg(short, long, env = "XIRA_SESSION_TOKEN", hide_env_values = true, default_value = "")]
+        token: String,
     },
 }
 
@@ -1023,11 +1044,43 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
 
         Commands::Admin(sub) => {
             let bearer = |t: &str| format!("Bearer {t}");
+            // Token resolve helper — explicit > env > stored file
+            let resolve = |provided: &str, gateway_arg: &str| -> Result<(String, String), Box<dyn std::error::Error>> {
+                match token_store::resolve_token(provided) {
+                    Ok((t, Some(g))) => {
+                        // Stored gateway varsa, kullanıcı gateway flag override etmediyse onu kullan.
+                        let effective_gw = if gateway_arg == "http://localhost:9000" {
+                            g
+                        } else {
+                            gateway_arg.to_string()
+                        };
+                        Ok((t, effective_gw))
+                    }
+                    Ok((t, None)) => Ok((t, gateway_arg.to_string())),
+                    Err(e) => Err(e.into()),
+                }
+            };
+            // Confirmation guard — destructive op için TTY prompt (--yes ile skip)
+            let confirm = |action: &str, target: &str, yes: bool| -> bool {
+                if yes {
+                    return true;
+                }
+                use std::io::{self, BufRead, Write};
+                print!("⚠️  {action} {target} — confirm? [y/N]: ");
+                io::stdout().flush().ok();
+                let stdin = io::stdin();
+                let mut line = String::new();
+                if stdin.lock().read_line(&mut line).is_err() {
+                    return false;
+                }
+                matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+            };
             match sub {
                 AdminCommands::Users { gateway, token } => {
+                    let (token, gateway) = resolve(token, gateway)?;
                     let resp = client
                         .get(format!("{gateway}/auth/admin/users"))
-                        .header("Authorization", bearer(token))
+                        .header("Authorization", bearer(&token))
                         .send()
                         .await?;
                     let status = resp.status();
@@ -1062,10 +1115,16 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                     role,
                     gateway,
                     token,
+                    yes,
                 } => {
+                    if !confirm("set-role to", &format!("{user_id} → {role}"), *yes) {
+                        println!("aborted.");
+                        return Ok(());
+                    }
+                    let (token, gateway) = resolve(token, gateway)?;
                     let resp = client
                         .put(format!("{gateway}/auth/admin/users/{user_id}/role"))
-                        .header("Authorization", bearer(token))
+                        .header("Authorization", bearer(&token))
                         .json(&serde_json::json!({"role": role}))
                         .send()
                         .await?;
@@ -1079,10 +1138,15 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                         println!("❌ {status}: {body}");
                     }
                 }
-                AdminCommands::Disable { user_id, gateway, token } => {
+                AdminCommands::Disable { user_id, gateway, token, yes } => {
+                    if !confirm("disable user", user_id, *yes) {
+                        println!("aborted.");
+                        return Ok(());
+                    }
+                    let (token, gateway) = resolve(token, gateway)?;
                     let resp = client
                         .post(format!("{gateway}/auth/admin/users/{user_id}/disable"))
-                        .header("Authorization", bearer(token))
+                        .header("Authorization", bearer(&token))
                         .send()
                         .await?;
                     let status = resp.status();
@@ -1095,10 +1159,15 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                         println!("❌ {status}: {body}");
                     }
                 }
-                AdminCommands::Logout { user_id, gateway, token } => {
+                AdminCommands::Logout { user_id, gateway, token, yes } => {
+                    if !confirm("force logout-all for", user_id, *yes) {
+                        println!("aborted.");
+                        return Ok(());
+                    }
+                    let (token, gateway) = resolve(token, gateway)?;
                     let resp = client
                         .post(format!("{gateway}/auth/admin/users/{user_id}/logout-all"))
-                        .header("Authorization", bearer(token))
+                        .header("Authorization", bearer(&token))
                         .send()
                         .await?;
                     let status = resp.status();
@@ -1110,10 +1179,15 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                         println!("❌ {status}: {body}");
                     }
                 }
-                AdminCommands::MfaReset { user_id, gateway, token } => {
+                AdminCommands::MfaReset { user_id, gateway, token, yes } => {
+                    if !confirm("MFA reset for", user_id, *yes) {
+                        println!("aborted.");
+                        return Ok(());
+                    }
+                    let (token, gateway) = resolve(token, gateway)?;
                     let resp = client
                         .post(format!("{gateway}/auth/admin/users/{user_id}/mfa/disable"))
-                        .header("Authorization", bearer(token))
+                        .header("Authorization", bearer(&token))
                         .send()
                         .await?;
                     let status = resp.status();
@@ -1146,17 +1220,54 @@ pub async fn run_cli_command(cmd: &Commands) -> Result<(), Box<dyn std::error::E
                         println!("🔐 MFA required");
                         println!("   user_id: {uid}");
                         println!("   POST /auth/mfa/login → {{user_id, code}} ile devam et.");
-                    } else if let Some(token) = body.get("token").and_then(|v| v.as_str()) {
+                    } else if let Some(tok) = body.get("token").and_then(|v| v.as_str()) {
                         let exp = body
                             .get("expires_at")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0);
-                        println!("✅ logged in as {email}");
-                        println!("   token: {token}");
-                        println!("   export XIRA_SESSION_TOKEN={token}");
-                        println!("   expires_at: {exp}");
+                        // Save to session store
+                        match token_store::save(tok, gateway) {
+                            Ok(p) => {
+                                println!("✅ logged in as {email}");
+                                println!("   token saved: {} (mode 0600)", p.display());
+                                println!("   expires_at: {exp}");
+                            }
+                            Err(e) => {
+                                println!("✅ logged in as {email}");
+                                println!("   ⚠️  could not save token to disk: {e}");
+                                println!("   token: {tok}");
+                                println!("   export XIRA_SESSION_TOKEN={tok}");
+                            }
+                        }
                     } else {
                         println!("? unexpected response: {body}");
+                    }
+                }
+                AdminCommands::Logoff => {
+                    match token_store::clear() {
+                        Ok(()) => println!("✅ session forgotten ({})", token_store::path_display()),
+                        Err(e) => println!("❌ {e}"),
+                    }
+                }
+                AdminCommands::Whoami { gateway, token } => {
+                    let (token, gateway) = resolve(token, gateway)?;
+                    let resp = client
+                        .get(format!("{gateway}/auth/me"))
+                        .header("Authorization", bearer(&token))
+                        .send()
+                        .await?;
+                    let status = resp.status();
+                    let body: serde_json::Value = resp.json().await?;
+                    if status.is_success() {
+                        let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("?");
+                        let role = body.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                        let id = body.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                        println!("👤 {email} [{role}]");
+                        println!("   id: {id}");
+                        println!("   gateway: {gateway}");
+                        println!("   store: {}", token_store::path_display());
+                    } else {
+                        println!("❌ {status}: {body}");
                     }
                 }
             }

@@ -1,10 +1,13 @@
 /// Audit Log — tamper-proof access logging for compliance
+use crate::middleware::audit_sink::AuditDispatcher;
 use crate::registry::storage::SqliteStorage;
 use std::sync::Arc;
 
 pub struct AuditLogger {
     storage: Option<Arc<SqliteStorage>>,
     enabled: bool,
+    /// Opsiyonel ek sink'ler (file JSONL + HTTP webhook). None ise sadece SQLite.
+    dispatcher: Option<Arc<AuditDispatcher>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -23,7 +26,17 @@ pub struct AuditEntry {
 }
 
 impl AuditLogger {
+    /// Geriye dönük uyumluluk constructor — sink yok, sadece SQLite.
     pub fn new(storage: Option<Arc<SqliteStorage>>, enabled: bool) -> Self {
+        Self::new_with_dispatcher(storage, enabled, None)
+    }
+
+    /// Sink dispatcher ile başlat — file/HTTP sink'ler paralel olarak yazılır.
+    pub fn new_with_dispatcher(
+        storage: Option<Arc<SqliteStorage>>,
+        enabled: bool,
+        dispatcher: Option<Arc<AuditDispatcher>>,
+    ) -> Self {
         if enabled {
             if let Some(ref s) = storage {
                 // 1) Tabloyu oluştur
@@ -74,13 +87,23 @@ impl AuditLogger {
                 tracing::info!("Audit log table initialized (append-only triggers active)");
             }
         }
-        Self { storage, enabled }
+        Self {
+            storage,
+            enabled,
+            dispatcher,
+        }
     }
 
-    /// Audit entry kaydet (parameterized — SQL injection safe)
+    /// Audit entry kaydet (parameterized — SQL injection safe).
+    /// SQLite + opsiyonel async sink'ler (file/HTTP) paralel olarak yazar.
     pub fn log(&self, entry: &AuditEntry) {
         if !self.enabled {
             return;
+        }
+
+        // Async sink dispatch (non-blocking; sink hatası counter'a yansır).
+        if let Some(ref disp) = self.dispatcher {
+            disp.dispatch(entry.clone());
         }
 
         if let Some(ref storage) = self.storage {

@@ -54,6 +54,29 @@ pub struct XiraConfig {
     pub observability: ObservabilityConfig,
     #[serde(default)]
     pub cors: CorsConfig,
+    #[serde(default)]
+    pub audit: AuditConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, Serialize)]
+pub struct AuditConfig {
+    /// JSON Lines append-only sink. Boş bırakılırsa file sink devre dışı.
+    #[serde(default)]
+    pub file_path: Option<String>,
+    /// HTTP webhook sink — uzak SIEM/log aggregator. Boş ise devre dışı.
+    /// SSRF guard her durumda uygulanır.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Webhook isteklerinde ek header'lar (örn. Bearer auth).
+    #[serde(default)]
+    pub webhook_headers: std::collections::HashMap<String, String>,
+    /// Sink buffer kapasitesi. Doluysa eski entry'ler DROP edilir.
+    #[serde(default = "default_audit_buffer")]
+    pub buffer_size: usize,
+}
+
+fn default_audit_buffer() -> usize {
+    10_000
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -791,6 +814,7 @@ impl Default for XiraConfig {
             identity: IdentityConfig::default(),
             observability: ObservabilityConfig::default(),
             cors: CorsConfig::default(),
+            audit: AuditConfig::default(),
         }
     }
 }

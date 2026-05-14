@@ -270,7 +270,39 @@ async fn main() -> std::io::Result<()> {
                 xira_config.bot_detection.block_bots,
                 xira_config.bot_detection.crawl_rate_limit,
             ));
-            let audit_logger = Arc::new(AuditLogger::new(Some(storage_arc.clone()), true));
+            // Audit sink'leri (file JSONL ve/veya HTTP webhook) config'den kur.
+            let mut sinks: Vec<Arc<dyn xiranet::middleware::audit_sink::AuditSink>> = Vec::new();
+            if let Some(ref p) = xira_config.audit.file_path {
+                sinks.push(Arc::new(
+                    xiranet::middleware::audit_sink::FileSink::new(std::path::PathBuf::from(p)),
+                ));
+                tracing::info!("Audit file sink active: {}", p);
+            }
+            if let Some(ref u) = xira_config.audit.webhook_url {
+                let headers: Vec<(String, String)> = xira_config
+                    .audit
+                    .webhook_headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                sinks.push(Arc::new(
+                    xiranet::middleware::audit_sink::HttpSink::new(u.clone(), headers),
+                ));
+                tracing::info!("Audit HTTP sink active: {}", u);
+            }
+            let audit_dispatcher = if sinks.is_empty() {
+                None
+            } else {
+                Some(Arc::new(xiranet::middleware::audit_sink::AuditDispatcher::new(
+                    sinks,
+                    xira_config.audit.buffer_size,
+                )))
+            };
+            let audit_logger = Arc::new(AuditLogger::new_with_dispatcher(
+                Some(storage_arc.clone()),
+                true,
+                audit_dispatcher,
+            ));
             let advanced_metrics = Arc::new(AdvancedMetrics::new());
             let health_scorer = Arc::new(HealthScorer::new());
             let sla_monitor = Arc::new(SlaMonitor::new());

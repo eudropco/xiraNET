@@ -505,6 +505,54 @@ Bu sürüm geniş bir security/correctness audit'inden çıktı. Tam liste için
 - `rust-toolchain.toml`: 1.88 pin.
 - `let _ = storage.*` silent fail → `tracing::warn`.
 
+## Audit log remote sink
+
+SQLite audit_log artık append-only trigger'larla korunmuş olsa da `DROP TABLE`
+veya disk tampering hâlâ mümkün. Gerçek tamper-evident için kayıtların DB
+dışına paralel yazılması gerek:
+
+```toml
+[audit]
+# JSON Lines append-only file (logrotate veya WORM volume ile koordine)
+file_path = "/var/log/xira/audit.jsonl"
+
+# Uzak SIEM / log aggregator (OTLP-friendly JSON POST)
+webhook_url = "https://siem.example.com/ingest/xira"
+
+# Webhook'a ekstra header (auth için)
+[audit.webhook_headers]
+"Authorization" = "Bearer ${SIEM_TOKEN}"
+
+# Buffer dolarsa eski entry'ler DROP edilir (uygulama'yı yavaşlatmamak için).
+# Drop sayısı `xiranet_db_persist_errors_total{table="audit_sink_buffer_full"}`
+# counter'ına yansır.
+buffer_size = 10000
+```
+
+Sink'ler **paralel** çalışır — biri yavaş/down olsa diğeri etkilenmez. SSRF
+guard her HTTP sink'e uygulanır; metadata IP'ler reddedilir.
+
+## CLI session persistence
+
+```bash
+# Login → token ~/.config/xira/session dosyasına yazılır (mode 0600)
+xira admin login admin@example.com hunter2
+# ✅ logged in as admin@example.com
+#    token saved: /Users/x/.config/xira/session (mode 0600)
+
+# Sonraki komutlar artık --token gerektirmez
+xira admin whoami
+xira admin users
+
+# Destructive op'lar interactive onay ister; otomasyon için --yes:
+xira admin set-role <uid> Viewer --yes
+
+# Çıkış
+xira admin logoff
+```
+
+Token store öncelik: `--token` flag > `XIRA_SESSION_TOKEN` env > `~/.config/xira/session`.
+
 ## Multi-node deployment notları
 
 xiraNET şu anda **single-node** olarak tasarlandı. Yatay ölçeklemek için
