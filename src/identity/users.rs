@@ -9,6 +9,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_FAILED_ATTEMPTS: u32 = 10;
 const LOCKOUT_WINDOW_SECS: u64 = 900; // 15 dk
+/// failed_attempts DashMap cap — IPv6 /64 veya random email DoS amplifier
+/// olmasın diye boyut sınırlı. Aşıldığında eski entry'ler en eskiden çekilir.
+const FAILED_ATTEMPTS_MAX_ENTRIES: usize = 10_000;
+
+/// Email normalize — case-insensitive lookup. `User@x.com`, `USER@x.com`,
+/// `user@x.com` artık aynı bucket'a gider; case-permutation ile brute-force
+/// koruması bypass'lanamaz.
+pub fn normalize_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
 
 pub struct UserManager {
     users: DashMap<String, User>,
@@ -297,7 +307,11 @@ impl UserManager {
         password: &str,
         role: UserRole,
     ) -> Result<User, String> {
-        if self.email_index.contains_key(&email) {
+        // Email her zaman normalize edilmiş halde indexlenir → case-insensitive
+        // uniqueness garantisi. Görüntülenecek `email` field'ı orijinal halini
+        // korur (kullanıcının yazdığı şekil).
+        let email_key = normalize_email(&email);
+        if self.email_index.contains_key(&email_key) {
             return Err("Email already registered".to_string());
         }
 
@@ -322,7 +336,7 @@ impl UserManager {
         };
 
         self.persist_user(&user);
-        self.email_index.insert(email, id.clone());
+        self.email_index.insert(email_key, id.clone());
         self.users.insert(id, user.clone());
         tracing::info!("User registered: {} ({})", user.email, user.id);
         Ok(user)
@@ -332,13 +346,15 @@ impl UserManager {
     /// - NotFound → InvalidCredentials'a katlanır
     /// - User yoksa bile constant-time dummy verify yapılır
     /// - Per-email failed-attempt counter ile rate-limit
+    /// - Email lookup normalize edilir (case-insensitive); permutation bypass yok
     pub fn authenticate(&self, email: &str, password: &str) -> AuthResult {
+        let email_key = normalize_email(email);
         // Lockout kontrolü (timing-safe değil ama açık account için bilgi sızdırmıyor)
-        if let Some(retry) = self.lockout_check(email) {
+        if let Some(retry) = self.lockout_check(&email_key) {
             return AuthResult::LockedOut { retry_after_secs: retry };
         }
 
-        let user_id = self.email_index.get(email).map(|id| id.clone());
+        let user_id = self.email_index.get(&email_key).map(|id| id.clone());
         let mut user_opt = user_id
             .as_ref()
             .and_then(|id| self.users.get_mut(id));
@@ -357,7 +373,7 @@ impl UserManager {
         let mut user = match user_opt {
             Some(u) => u,
             None => {
-                self.record_failure(email);
+                self.record_failure(&email_key);
                 return AuthResult::InvalidCredentials;
             }
         };
@@ -368,12 +384,12 @@ impl UserManager {
         }
 
         if !password_ok {
-            self.record_failure(email);
+            self.record_failure(&email_key);
             return AuthResult::InvalidCredentials;
         }
 
         // Başarı: counter sıfırla
-        self.failed_attempts.remove(email);
+        self.failed_attempts.remove(&email_key);
 
         if user.mfa_enabled {
             return AuthResult::MfaRequired {
@@ -417,6 +433,30 @@ impl UserManager {
 
     fn record_failure(&self, email: &str) {
         let now = now_secs();
+        // Cap aşıldıysa LOCKOUT_WINDOW_SECS dolu en eski entry'leri prune et.
+        // Saldırgan random email atışı yapsa bile map sınırsız büyümez.
+        if self.failed_attempts.len() >= FAILED_ATTEMPTS_MAX_ENTRIES {
+            let cutoff = now.saturating_sub(LOCKOUT_WINDOW_SECS);
+            self.failed_attempts
+                .retain(|_, fa| fa.first_failure_at.load(Ordering::Relaxed) >= cutoff);
+            // Hâlâ tepedeyse en az eskiyi at — best-effort, exact LRU değil
+            // (atomik counter'lı entry'ler için pahalı). Çok sayıda concurrent
+            // attacker için yeterli savunma.
+            if self.failed_attempts.len() >= FAILED_ATTEMPTS_MAX_ENTRIES {
+                let mut oldest_key: Option<String> = None;
+                let mut oldest_ts = u64::MAX;
+                for entry in self.failed_attempts.iter() {
+                    let ts = entry.first_failure_at.load(Ordering::Relaxed);
+                    if ts < oldest_ts {
+                        oldest_ts = ts;
+                        oldest_key = Some(entry.key().clone());
+                    }
+                }
+                if let Some(k) = oldest_key {
+                    self.failed_attempts.remove(&k);
+                }
+            }
+        }
         self.failed_attempts
             .entry(email.to_string())
             .and_modify(|fa| {

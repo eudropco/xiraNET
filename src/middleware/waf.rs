@@ -1,6 +1,7 @@
 use crate::bus::{BusEvent, NoOpBus, XiraBus};
+use dashmap::DashSet;
 use regex::Regex;
-use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// UTF-8 boundary'i kırmadan, en fazla `max` karakter alır.
@@ -27,7 +28,12 @@ pub struct Waf {
     xss_patterns: Vec<Regex>,
     traversal_patterns: Vec<Regex>,
     custom_patterns: RwLock<Vec<CustomRule>>,
-    blocked_ips: HashSet<String>,
+    /// Process-wide monoton ID — concurrent add/remove + multi-node node-local'da
+    /// unique. Eski `len() + 1` patterni race + divergent ID üretiyordu.
+    next_rule_id: AtomicU64,
+    /// Arc<Waf> altında çağrılabilir blocklama — eski `HashSet + &mut self` Arc
+    /// üzerinden borrow alamadığı için dead code'du.
+    blocked_ips: DashSet<String>,
     mode: WafMode,
     bus: RwLock<Arc<dyn XiraBus>>,
 }
@@ -107,7 +113,8 @@ impl Waf {
                 Regex::new(r"%2e%2e[%/\\]").unwrap(),
             ],
             custom_patterns: RwLock::new(Vec::new()),
-            blocked_ips: HashSet::new(),
+            next_rule_id: AtomicU64::new(1),
+            blocked_ips: DashSet::new(),
             mode,
             bus: RwLock::new(Arc::new(NoOpBus) as Arc<dyn XiraBus>),
         }
@@ -142,15 +149,16 @@ impl Waf {
     }
 
     /// Bus-driven apply — local state'i mutate eder ama bus'a YENİDEN yayınlamaz.
-    /// Idempotent: aynı id ile çağrılırsa duplicate eklenmez (id replacement).
+    /// Atomic ID: `len() + 1` patterni eski sürümde race + sil/ekle çakışması
+    /// üretiyordu. `next_rule_id.fetch_add(1)` monoton + race-free.
     pub fn apply_add_pattern(&self, pattern_src: &str, label: &str) -> Result<u64, String> {
         let re = Regex::new(pattern_src).map_err(|e| format!("invalid regex: {e}"))?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let id = self.next_rule_id.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.custom_patterns.write().map_err(|_| "lock poisoned")?;
-        let id = guard.len() as u64 + 1;
         guard.push(CustomRule {
             id,
             pattern_src: pattern_src.to_string(),
@@ -200,16 +208,18 @@ impl Waf {
 
     /// Config'den load — initial set veya hot-reload sırasında çağrılır.
     /// Mevcut custom_patterns tamamen değiştirilir.
+    /// Config-based load — mevcut custom_patterns tamamen değiştirilir, ID'ler
+    /// atomic counter'dan alınır.
     pub fn load_custom_patterns_from_strings(&self, patterns: &[String]) {
         let mut compiled: Vec<CustomRule> = Vec::new();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        for (i, src) in patterns.iter().enumerate() {
+        for src in patterns.iter() {
             match Regex::new(src) {
                 Ok(re) => compiled.push(CustomRule {
-                    id: (i + 1) as u64,
+                    id: self.next_rule_id.fetch_add(1, Ordering::Relaxed),
                     pattern_src: src.clone(),
                     pattern: re,
                     label: "CUSTOM".to_string(),
@@ -361,13 +371,19 @@ impl Waf {
     }
 
     /// IP'yi engelle
-    pub fn block_ip(&mut self, ip: String) {
+    /// IP'yi engelle — `Arc<Waf>` altında çağrılabilir (`&self`). Eski
+    /// `&mut self` versiyonu Arc borrow yapamadığı için dead code'du.
+    pub fn block_ip(&self, ip: String) {
         self.blocked_ips.insert(ip);
     }
 
     /// IP engelini kaldır
-    pub fn unblock_ip(&mut self, ip: &str) {
-        self.blocked_ips.remove(ip);
+    pub fn unblock_ip(&self, ip: &str) -> bool {
+        self.blocked_ips.remove(ip).is_some()
+    }
+
+    pub fn list_blocked_ips(&self) -> Vec<String> {
+        self.blocked_ips.iter().map(|e| e.clone()).collect()
     }
 
     pub fn is_enabled(&self) -> bool {

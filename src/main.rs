@@ -106,6 +106,7 @@ fn start_runtime_config_sync(
                 config.rate_limit.max_requests,
                 config.rate_limit.window_secs,
             );
+            rate_limiter.set_trust_xff(config.rate_limit.trust_xff);
             response_cache.set_enabled(config.cache.enabled);
             response_cache.set_ttl_secs(config.cache.ttl_secs);
             cb_manager.update_config(
@@ -227,9 +228,10 @@ async fn main() -> std::io::Result<()> {
                 xira_config.alerting.on_service_down,
                 xira_config.alerting.on_service_up,
             );
-            let rate_limiter = RateLimiter::new(
+            let rate_limiter = RateLimiter::with_options(
                 xira_config.rate_limit.max_requests,
                 xira_config.rate_limit.window_secs,
+                xira_config.rate_limit.trust_xff,
             );
 
             // Plugin Manager
@@ -356,6 +358,13 @@ async fn main() -> std::io::Result<()> {
             );
             session_mgr.set_bus(bus.clone());
             let session_manager = Arc::new(session_mgr);
+
+            // Authenticator — login ↔ session glue tip sisteminde garantili
+            // (v3 audit Yarı A, madde 9). Handler'lar artık ham token taşımıyor.
+            let authenticator = Arc::new(xiranet::identity::authenticator::Authenticator::new(
+                user_manager.clone(),
+                session_manager.clone(),
+            ));
 
             // Bus subscriber: WAF + SessionManager event'lerini dinler.
             // Redis bus ise gerçek dispatch, NoOpBus ise idle (subscriber yok).
@@ -612,6 +621,7 @@ async fn main() -> std::io::Result<()> {
             let sla_data = web::Data::new(sla_monitor.clone());
             let user_data = web::Data::new(user_manager.clone());
             let session_data = web::Data::new(session_manager.clone());
+            let authenticator_data = web::Data::new(authenticator.clone());
             let cron_data = web::Data::new(cron_scheduler.clone());
             let event_data = web::Data::new(event_bus.clone());
             let workflow_data = web::Data::new(workflow_engine.clone());
@@ -671,6 +681,7 @@ async fn main() -> std::io::Result<()> {
                     .app_data(sla_data.clone())
                     .app_data(user_data.clone())
                     .app_data(session_data.clone())
+                    .app_data(authenticator_data.clone())
                     .app_data(cron_data.clone())
                     .app_data(event_data.clone())
                     .app_data(workflow_data.clone())

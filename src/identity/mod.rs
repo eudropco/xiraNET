@@ -1,3 +1,4 @@
+pub mod authenticator;
 pub mod mfa;
 pub mod secret_box;
 pub mod sessions;

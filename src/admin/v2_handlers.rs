@@ -105,8 +105,7 @@ pub async fn create_user(
 }
 
 pub async fn login_user(
-    mgr: web::Data<Arc<UserManager>>,
-    sessions: web::Data<Arc<SessionManager>>,
+    authenticator: web::Data<Arc<crate::identity::authenticator::Authenticator>>,
     req: HttpRequest,
     body: web::Json<LoginRequest>,
 ) -> HttpResponse {
@@ -126,29 +125,25 @@ pub async fn login_user(
         .unwrap_or("unknown")
         .to_string();
 
-    match mgr.authenticate(&body.email, &body.password) {
-        crate::identity::users::AuthResult::Success { user, token } => {
-            let session = sessions.create(&user.id, &token, &ip, &ua, 86400);
-            HttpResponse::Ok().json(serde_json::json!({
-                "token": session.token, "user_id": user.id,
-                "expires_at": session.expires_at,
-            }))
-        }
-        crate::identity::users::AuthResult::MfaRequired { user_id } => {
+    use crate::identity::authenticator::AuthOutcome;
+    match authenticator.login(&body.email, &body.password, &ip, &ua) {
+        AuthOutcome::Success { user_id, session, .. } => HttpResponse::Ok().json(serde_json::json!({
+            "token": session.token, "user_id": user_id,
+            "expires_at": session.expires_at,
+        })),
+        AuthOutcome::MfaRequired { user_id } => {
             HttpResponse::Ok().json(serde_json::json!({"mfa_required": true, "user_id": user_id}))
         }
-        crate::identity::users::AuthResult::AccountDisabled => {
+        AuthOutcome::AccountDisabled => {
             HttpResponse::Forbidden().json(serde_json::json!({"error": "Account disabled"}))
         }
-        crate::identity::users::AuthResult::LockedOut { retry_after_secs } => {
-            HttpResponse::TooManyRequests()
-                .insert_header(("Retry-After", retry_after_secs.to_string()))
-                .json(serde_json::json!({
-                    "error": "Too many failed attempts",
-                    "retry_after_secs": retry_after_secs,
-                }))
-        }
-        crate::identity::users::AuthResult::InvalidCredentials => {
+        AuthOutcome::LockedOut { retry_after_secs } => HttpResponse::TooManyRequests()
+            .insert_header(("Retry-After", retry_after_secs.to_string()))
+            .json(serde_json::json!({
+                "error": "Too many failed attempts",
+                "retry_after_secs": retry_after_secs,
+            })),
+        AuthOutcome::InvalidCredentials => {
             HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid credentials"}))
         }
     }
@@ -411,8 +406,7 @@ pub struct MfaLoginRequest {
 
 /// POST /auth/mfa/login — login yanıtında MfaRequired alındığında 2. adım.
 pub async fn mfa_login(
-    mgr: web::Data<Arc<UserManager>>,
-    sessions: web::Data<Arc<SessionManager>>,
+    authenticator: web::Data<Arc<crate::identity::authenticator::Authenticator>>,
     req: HttpRequest,
     body: web::Json<MfaLoginRequest>,
 ) -> HttpResponse {
@@ -426,16 +420,14 @@ pub async fn mfa_login(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown")
         .to_string();
-    match mgr.complete_mfa_login(&body.user_id, &body.code) {
-        crate::identity::users::AuthResult::Success { user, token } => {
-            let s = sessions.create(&user.id, &token, &ip, &ua, 86400);
-            HttpResponse::Ok().json(serde_json::json!({
-                "token": s.token,
-                "user_id": user.id,
-                "expires_at": s.expires_at,
-            }))
-        }
-        crate::identity::users::AuthResult::AccountDisabled => {
+    use crate::identity::authenticator::AuthOutcome;
+    match authenticator.complete_mfa(&body.user_id, &body.code, &ip, &ua) {
+        AuthOutcome::Success { user_id, session, .. } => HttpResponse::Ok().json(serde_json::json!({
+            "token": session.token,
+            "user_id": user_id,
+            "expires_at": session.expires_at,
+        })),
+        AuthOutcome::AccountDisabled => {
             HttpResponse::Forbidden().json(serde_json::json!({"error": "Account disabled"}))
         }
         _ => HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid code"})),

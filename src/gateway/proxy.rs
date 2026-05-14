@@ -41,12 +41,18 @@ impl ProxyResult {
     }
 }
 
-const SKIP_HEADERS: [&str; 5] = [
+/// RFC 7230 §6.1 hop-by-hop header'lar — proxy boyunca forward edilmez.
+/// Eksik liste request smuggling ve auth bypass amplifier'ı oluşturur;
+/// `te`/`proxy-authorization`/`proxy-connection` v3.0 audit'inde tespit edildi.
+const SKIP_HEADERS: [&str; 8] = [
     "host",
     "connection",
     "transfer-encoding",
     "keep-alive",
     "upgrade",
+    "te",
+    "proxy-authorization",
+    "proxy-connection",
 ];
 
 pub fn build_forward_headers(original_req: &HttpRequest) -> reqwest::header::HeaderMap {
@@ -163,10 +169,11 @@ pub async fn forward_request_raw_with_headers(
                     is_error: false,
                 },
                 Err(e) => {
-                    tracing::error!("Failed to read response body: {}", e);
+                    // Detay sadece server log'a; client'a sızdırma — eski sürüm
+                    // upstream hostname / DNS / port'u recon helper olarak veriyordu.
+                    tracing::error!(error = %e, "Failed to read upstream response body");
                     let err_body = serde_json::to_vec(&serde_json::json!({
                         "error": "Failed to read upstream response",
-                        "detail": e.to_string()
                     }))
                     .unwrap_or_default();
                     ProxyResult {
@@ -179,10 +186,11 @@ pub async fn forward_request_raw_with_headers(
             }
         }
         Err(e) => {
-            tracing::error!("Proxy error to {}: {}", downstream_url, e);
+            // Detay (downstream URL, DNS hata mesajı, port info) sadece server
+            // log'a. Client generic 502 görür — internal topology leak yok.
+            tracing::error!(downstream = %downstream_url, error = %e, "Proxy error");
             let err_body = serde_json::to_vec(&serde_json::json!({
                 "error": "Service unavailable",
-                "detail": e.to_string()
             }))
             .unwrap_or_default();
             ProxyResult {

@@ -197,7 +197,8 @@ where
         // Admin API, dashboard shell ve admin websocket'leri kendi auth
         // mekanizmalarını kullandığı için JWT'den muaf tutulur.
         // Path normalize: trailing-slash ve duplicate-slash'ları temizle ki
-        // "/xira/../api/secret" gibi traversal'larla skip edilemesin.
+        // `..` segment'leri gerçekten çıkarılır → "/xira/../api/secret" → "/api/secret".
+        // Aksi halde traversal ile exempt path'leri (örn. /xira/) suistimal edilebilir.
         let raw_path = req.path();
         let normalized = normalize_path(raw_path);
         if is_exempt_path(&normalized) {
@@ -292,21 +293,32 @@ where
     }
 }
 
-/// Path normalize: ardışık slash'ları tekille, trailing slash'ı koru.
-/// Actix path'leri zaten decode + normalize ediyor ama defansif olarak tekrar yapıyoruz.
+/// Path normalize: duplicate slash kollaps + `..`/`.` segment resolution.
+///
+/// v3.0 audit fix: önceki versiyon yorumda "/xira/../api/secret traversal'ı
+/// önlüyoruz" iddia ediyordu ama gerçekte `..` segment'lerini KALDIRMIYORDU,
+/// sadece `//` → `/` yapıyordu. Bu commit'te gerçek normalization implement
+/// edildi — segment stack ile `..` parent pop, `.` skip.
 fn normalize_path(p: &str) -> String {
-    let mut out = String::with_capacity(p.len());
-    let mut prev_slash = false;
-    for c in p.chars() {
-        if c == '/' {
-            if !prev_slash {
-                out.push(c);
+    let leading_slash = p.starts_with('/');
+    let trailing_slash = p.len() > 1 && p.ends_with('/');
+    let mut stack: Vec<&str> = Vec::new();
+    for seg in p.split('/') {
+        match seg {
+            "" | "." => continue,
+            ".." => {
+                stack.pop();
             }
-            prev_slash = true;
-        } else {
-            out.push(c);
-            prev_slash = false;
+            other => stack.push(other),
         }
+    }
+    let mut out = String::with_capacity(p.len());
+    if leading_slash {
+        out.push('/');
+    }
+    out.push_str(&stack.join("/"));
+    if trailing_slash && !out.ends_with('/') {
+        out.push('/');
     }
     out
 }
@@ -321,4 +333,41 @@ fn is_exempt_path(path: &str) -> bool {
         || path == "/xira"
         || path.starts_with("/auth/")
         || path == "/auth"
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_path;
+
+    #[test]
+    fn collapses_duplicate_slashes() {
+        assert_eq!(normalize_path("/a//b///c"), "/a/b/c");
+    }
+
+    #[test]
+    fn resolves_dot_dot_traversal() {
+        // Önceki sürümde "/xira/../api/secret" → "/xira/../api/secret" (yalan)
+        // Şimdi: doğru çözüm "/api/secret"
+        assert_eq!(normalize_path("/xira/../api/secret"), "/api/secret");
+    }
+
+    #[test]
+    fn resolves_multiple_dot_dot() {
+        assert_eq!(normalize_path("/a/b/../../c"), "/c");
+    }
+
+    #[test]
+    fn drops_single_dot() {
+        assert_eq!(normalize_path("/a/./b"), "/a/b");
+    }
+
+    #[test]
+    fn preserves_trailing_slash() {
+        assert_eq!(normalize_path("/a/b/"), "/a/b/");
+    }
+
+    #[test]
+    fn dot_dot_above_root_pops_to_root() {
+        assert_eq!(normalize_path("/../../foo"), "/foo");
+    }
 }

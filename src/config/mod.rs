@@ -231,6 +231,10 @@ pub struct RateLimitConfig {
     /// Per-route overrides: path prefix → max requests per window
     #[serde(default)]
     pub routes: std::collections::HashMap<String, u32>,
+    /// Reverse proxy/LB arkasındaysa X-Forwarded-For ilk hop'unu client IP
+    /// say. Doğrudan public exposure'da AÇILMAZ — XFF spoof'lanabilir.
+    #[serde(default)]
+    pub trust_xff: bool,
 }
 
 impl Default for RateLimitConfig {
@@ -239,6 +243,7 @@ impl Default for RateLimitConfig {
             max_requests: 100,
             window_secs: 60,
             routes: std::collections::HashMap::new(),
+            trust_xff: false,
         }
     }
 }

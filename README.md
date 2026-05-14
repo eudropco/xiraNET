@@ -13,7 +13,28 @@
 
 Tüm projelerinizi tek bir merkezden yönetin. Runtime'da servis bağlayın, WAF/Bot koruması, SLA izleme, cron otomasyonu, MFA ve olay yönetimi tek yerden.
 
-> **v3.0.0 audit notları:** Bu sürüm geniş bir security/correctness audit'ten geçti. Önemli değişiklikler için [CHANGELOG'a](#changelog--v300-audit-highlights) bak — özellikle session validation, SSRF guards, constant-time API key compare, JWT default-secret guard, MFA at-rest encryption ve CORS hardening üretim öncesi mutlaka okunmalı.
+> ⚠️ **v3.0.0 dürüstlük notu — bu sürüm henüz production-ready değil.**
+>
+> Önceki commit message'ları ve dokümanlar bir "v3.0.0 audit'ten geçti" anlatısı
+> kurdu. Sertleştirme yapıldı ama [audit raporundaki bulguların](docs/AUDIT-FINDINGS.md)
+> hepsi kapanmadı. Bilinen açık konular özetle:
+>
+> - WAF input-normalization yok (URL-decode/unicode escape açıkları), `block_ip` API
+>   `Arc` altında çağrılamaz, custom rule ID multi-node'da divergent
+> - Rate limiter peer-IP only (X-Forwarded-For okumuyor) + per-worker bucket'lar
+> - Proxy error response upstream string'ini client'a sızdırır
+> - SSRF guard TOCTOU (resolve→connect arası açık); UpstreamOnly mode 127.0.0.1:6379'a izin verir
+> - Sessions: IP/UA binding yok, last_activity persist edilmiyor, max_sessions race
+> - SecretBox `from_passphrase` SHA-256 KDF (Argon2 değil); key rotation flow yok
+> - JWT path normalize yorumu `..` strip iddia eder, kod yapmaz
+>
+> Tam liste için `docs/AUDIT-FINDINGS.md`. Production'a koymadan önce minimum
+> "Yarı A" fix'lerinin tamamlanmış olması gerekir.
+>
+> v3.0 dokümante edilen sertleştirmeler — JWT default-secret guard, MFA at-rest
+> encryption, K1/K2/K3 (session validation wire, SSRF guards baseline, CT API key
+> compare), CORS explicit origins, audit log append-only triggers — gerçekten
+> uygulanmıştır ve test edilmiştir. Geri kalan açıkları dürüstçe listeliyoruz.
 
 ---
 
