@@ -177,6 +177,23 @@ mod waf_tests {
     }
 
     #[test]
+    fn test_waf_blocks_triple_encoded_sqli() {
+        let waf = Waf::new(true, WafMode::Block);
+        // %252520 = encoded(%2520) = encoded(encoded(%20)) — 3-pass decode gerek.
+        let verdict = waf.inspect(
+            "/api/users",
+            Some("id=1%252520union%252520select%252520from%252520users"),
+            "",
+            &[],
+            "127.0.0.1",
+        );
+        assert!(
+            matches!(verdict, WafVerdict::Block { .. }),
+            "Triple-encoded SQLi must be blocked (fixed-point decode)"
+        );
+    }
+
+    #[test]
     fn test_waf_blocks_double_encoded_sqli() {
         let waf = Waf::new(true, WafMode::Block);
         // %2520 = encoded %20 = encoded space; 2-pass decode gerek.
@@ -1483,25 +1500,72 @@ mod rbac_tests {
 mod adversarial_tests {
     use xiranet::middleware::jwt::JwtAuth;
 
-    /// `alg=none` JWT bypass denemesi — algorithm pinning ile reddedilmeli.
-    /// Eski sürümde validation.algorithms boş bırakılırsa jsonwebtoken
-    /// `Algorithm::HS256` default alır; "none" alg attacker tarafından
-    /// tetiklenirse decode'a girer.
+    /// `alg=none` JWT bypass — boot reddetmesi + decode-level reddetme.
+    /// İki katman test:
+    ///   1. JwtAuth::new("none", ...) → UnsupportedAlgorithm (boot reject)
+    ///   2. Gerçek HTTP request: HS256 server'a `alg=none` JWT yollanırsa 401
     #[test]
-    fn jwt_alg_none_rejected() {
-        // Geçerli 32-byte secret, HS256 — pinned.
-        let secret = "valid-secret-with-at-least-32-bytes-aaaa".to_string();
-        let auth = JwtAuth::new(secret, "HS256", None, true).expect("init");
-        // JwtAuth public API decode etmiyor doğrudan; bu test JwtAuth::new
-        // başarılı kurulumla tanıt: HS256/384/512 + RS256 dışı algoritma
-        // unsupported, "none" da unsupported.
-        let result =
-            JwtAuth::new("any-secret-32-bytes-aaaaaaaaaaaaaaa".to_string(), "none", None, true);
+    fn jwt_alg_none_init_rejected() {
+        let result = JwtAuth::new(
+            "any-secret-32-bytes-aaaaaaaaaaaaaaa".to_string(),
+            "none",
+            None,
+            true,
+        );
         assert!(
             result.is_err(),
             "alg=none must be rejected at boot (UnsupportedAlgorithm)"
         );
-        drop(auth);
+    }
+
+    /// Decode-level alg-confusion reject — jsonwebtoken kütüphanesinin
+    /// `validation.algorithms = vec![HS256]` pin'i ile `{"alg":"none"}`
+    /// attacker JWT'sini reddetmesi.
+    #[test]
+    fn jwt_alg_none_decode_rejected() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+        // Attacker JWT: alg=none header + payload + boş signature
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"admin","exp":9999999999}"#);
+        let evil_token = format!("{header}.{payload}.");
+
+        // Server HS256 pinned — decode reject
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.algorithms = vec![Algorithm::HS256];
+        validation.validate_exp = true;
+        let key = DecodingKey::from_secret(b"server-secret-32-bytes-aaaaaaaaaa");
+
+        let result = decode::<serde_json::Value>(&evil_token, &key, &validation);
+        assert!(
+            result.is_err(),
+            "HS256-pinned server must reject alg=none JWT (real attack surface)"
+        );
+    }
+
+    /// HS→RS algorithm confusion: HS256 server'a `{"alg":"RS256"}` JWT
+    /// (attacker server'ın public key'i ile HMAC). Algorithm pin koruma.
+    #[test]
+    fn jwt_alg_confusion_hs_to_rs_rejected() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"admin","exp":9999999999}"#);
+        // Sahte signature
+        let sig = URL_SAFE_NO_PAD.encode([0u8; 32]);
+        let evil_token = format!("{header}.{payload}.{sig}");
+
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.algorithms = vec![Algorithm::HS256];
+        let key = DecodingKey::from_secret(b"server-secret-32-bytes-aaaaaaaaaa");
+
+        let result = decode::<serde_json::Value>(&evil_token, &key, &validation);
+        assert!(
+            result.is_err(),
+            "alg confusion (HS→RS) must be rejected by validation.algorithms pin"
+        );
     }
 
     /// JWT empty algorithm string → unsupported.
@@ -1529,7 +1593,7 @@ mod adversarial_tests {
     }
 
     /// Session create race — 10 concurrent create, max_sessions=3 limitiyle.
-    /// Yeni atomic two-phase ile race-free: tam olarak 3 session aktif kalır.
+    /// Atomic two-phase ile EXACTLY 3 session aktif kalmalı (race-free).
     #[tokio::test]
     async fn session_create_race_max_sessions() {
         use std::sync::Arc;
@@ -1547,15 +1611,14 @@ mod adversarial_tests {
             h.await.unwrap();
         }
         let user_sessions = mgr.user_sessions("u1");
-        // max=3 enforce: aktif session count <= 3
-        assert!(
-            user_sessions.len() <= 3,
-            "max_sessions race: expected <= 3, got {}",
+        // EXACTLY 3 — race-free atomic two-phase ile garantili.
+        // Eski sürüm "<=3" lax assertion idi; 2 veya 1 ile de geçerdi.
+        assert_eq!(
+            user_sessions.len(),
+            3,
+            "max_sessions atomic: expected exactly 3, got {}",
             user_sessions.len()
         );
-        // Aktif session toplam <= 3 (per-user) ama global active_count daha
-        // büyük olabilir invalidate'ten önce — burada bu kullanıcı için
-        // assertion yeterli.
     }
 
     /// Session validate IP mismatch → invalidate.
@@ -1581,6 +1644,42 @@ mod adversarial_tests {
             mgr.validate_with_request(&session.token, Some("1.2.3.4"), Some("Mozilla/5.0"))
                 .is_none(),
             "post-invalidation lookup must fail"
+        );
+    }
+
+    /// WAF rule ID multi-node coherence — bus event id local'e AYNI yazılır.
+    /// Eski sürüm: Node A id=5 publish, Node B apply'da yeni atomic id=12 alır.
+    /// Yeni: Node B `apply_add_pattern_with_id(5, ...)` ile aynı id.
+    #[tokio::test]
+    async fn waf_rule_id_multi_node_coherent() {
+        use xiranet::middleware::waf::{Waf, WafMode};
+        let node_b = Waf::new(true, WafMode::Block);
+        // Simulate: Node A id=5 → bus → Node B apply
+        node_b
+            .apply_add_pattern_with_id(5, "EVIL-A", "from-a")
+            .unwrap();
+        node_b
+            .apply_add_pattern_with_id(7, "EVIL-B", "from-a")
+            .unwrap();
+        let rules = node_b.list_custom_patterns();
+        let ids: Vec<u64> = rules.iter().map(|r| r.id).collect();
+        assert!(ids.contains(&5), "id=5 must be preserved from bus event");
+        assert!(ids.contains(&7), "id=7 must be preserved");
+        // Local add — next_rule_id bump edildi, 7'den büyük olmalı
+        let local_id = node_b.add_custom_pattern("LOCAL", "local").unwrap();
+        assert!(
+            local_id > 7,
+            "next local ID must avoid collision with remote IDs (got {local_id})"
+        );
+        // Idempotent — aynı id ile tekrar çağrılırsa duplicate eklenmez
+        node_b
+            .apply_add_pattern_with_id(5, "EVIL-A", "from-a")
+            .unwrap();
+        let count_after = node_b.list_custom_patterns().len();
+        assert_eq!(
+            count_after,
+            rules.len() + 1,
+            "duplicate id should be idempotent"
         );
     }
 

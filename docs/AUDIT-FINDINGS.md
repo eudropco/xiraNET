@@ -109,29 +109,55 @@ PARTIAL (kısmen fix var, kalan iş tanımlı), CLOSED (test edilmiş + doküman
     (NoOpBus no-op, RedisBus pub/sub task). main.rs artık tek bus instance
     + tek subscriber → connection count 1×.
 
-## OPEN — Yarı C (geriye kalan, scope büyük)
+## OPEN — Yarı C (NEXT PHASE)
 
-### NEXT PHASE
+### v3.1.0 milestone
 26. **main.rs 914-line god function** — domain başına `bootstrap::*`
-    module ile split. Risk: tüm test'leri yeniden doğrulamak ~3-4 saat.
-    Bu commit'te yapılmadı; v3.1.0 milestone'una koyuluyor.
-29. **Adversarial test suite genişletme** — `adversarial_tests` modülünde
-    7 test eklendi: alg=none reject, empty alg, weak secret, session race,
-    IP binding mismatch, Arc<Waf>::block_ip canlı, email case-permutation.
-    DNS rebinding mock (resolve→connect IP swap test) eklenmedi —
-    `reqwest::ClientBuilder::resolve_to_addrs` API'sini mocklamak entegre
-    test harness gerektirir; PinnedUrl tasarımı zaten DNS bypass garantili,
-    test priority düşük. Daha geniş test coverage (örn. HTTP smuggling,
-    websocket auth race) NEXT PHASE.
+    module ile split. Tüm test'lerin re-verify gerek (3-4 saat scope).
+
+### Kabul edilmiş trade-off
+- **Cron DNS rebinding window 60s** — PinCache TTL ile pure-tick-resolve
+  arasında trade-off; DNS spam azaltma için tercih edildi. Saldırgan
+  rebinding 60s window içinde yapmalı.
+- **WAF percent-decode 4-pass cap** — pathological `%2525...` >4 nested
+  pathological; DoS yüzeyi olmaması için cap.
 
 ### CLOSED
 27. ✅ **CI workspace** — crates/ silindi, `members = ["."]` tek member,
     type-check eksiği yok.
 28. ✅ **CI audit hardening** — `cargo install --locked cargo-audit`
-    (`|| true` kaldırıldı), `cargo audit --deny warnings` (advisory'ler
-    fail eder, `.cargo/audit.toml` ile gerekçeli ignore listesi).
+    (`|| true` kaldırıldı), `cargo audit --deny warnings`.
+29. ✅ **Adversarial test suite** — 11 test (alg=none init **VE**
+    decode-level reject; HS→RS alg confusion reject; weak secret; session
+    create race **EXACT 3**; IP binding mismatch invalidate; Arc<Waf>::
+    block_ip canlı; email case-permutation; **WAF triple-encoded SQLi
+    block**; **WAF multi-node ID coherence + idempotent**).
+    DNS rebinding mock NEXT PHASE (PinnedUrl tasarımı garantili,
+    integration harness eklemek scope büyük).
 30. ✅ **`crates/` belgesel yalan** — gerçekten silindi (Yarı A).
 31. ✅ **`crates/xira-auth/jwt.rs` divergent** — silindi.
+
+## Self-audit düzeltmeleri (Phase 5 part 3)
+
+İlk Yarı B+C commit'inde 3 madde yarı bırakılmıştı; "emin misin" sorgusu
+sonrası dürüst self-audit ile bulundu ve kapatıldı:
+
+- **WAF rule ID multi-node divergence GERÇEK fix**: önceki `apply_add_pattern`
+  bus event'teki `id`'yi IGNORE edip local atomic'ten yeni id alıyordu →
+  Node A id=5 publish, Node B'de id=12 ile insert → `WafRuleRemoved {id:5}`
+  Node B'de yanlış kuralı silemiyor. Yeni `apply_add_pattern_with_id(id, ...)`
+  bus id'sini local'e aynı yazar; `next_rule_id`'yi bump eder (gelecek
+  local add collision yok). Idempotent: aynı id replay = skip.
+- **JWT alg=none gerçek decode-level test**: önceki test sadece
+  `JwtAuth::new("none", ...)` init reddini doğruluyordu. Yeni test:
+  attacker `{"alg":"none"}` header'ı + empty signature ile sahte JWT
+  üretir, HS256-pinned server decode reddeder. HS→RS confusion için ek test.
+- **`events` tablo append-only trigger**: `audit_log`'da trigger vardı,
+  `events`'da yoktu. `update_role` artık events'a yazıyor → o row da
+  tamper-evident olmalı. UPDATE/DELETE reject trigger eklendi.
+- **session_create_race EXACT 3 assertion** (eski `<= 3` lax idi).
+- **WAF 4-pass percent-decode** (3+ encoding bypass kapalı).
+- **Cron PinCache 60s TTL** — DNS spam yok, rebinding window dokümante.
 
 ---
 

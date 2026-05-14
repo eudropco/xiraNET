@@ -82,6 +82,27 @@ impl SqliteStorage {
             [],
         )?;
 
+        // Append-only triggers — identity.role_changed, service_registered vb.
+        // tamper-evident audit trail. audit_log tablosu da aynı pattern'i kullanır.
+        // Not: DROP TABLE / ALTER TABLE hâlâ mümkün; tam koruma WORM volume veya
+        // remote sink (audit_sink_http) gerekir.
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS events_no_update
+             BEFORE UPDATE ON events
+             BEGIN
+                 SELECT RAISE(ABORT, 'events is append-only: UPDATE forbidden');
+             END;",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS events_no_delete
+             BEFORE DELETE ON events
+             BEGIN
+                 SELECT RAISE(ABORT, 'events is append-only: DELETE forbidden');
+             END;",
+            [],
+        )?;
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_logs_timestamp ON request_logs(timestamp)",
             [],

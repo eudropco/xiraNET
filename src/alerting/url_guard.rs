@@ -166,6 +166,52 @@ impl PinnedUrl {
     }
 }
 
+/// Process-wide pinned URL cache — DNS lookup spam'i azaltır.
+/// Key: URL string. Value: (PinnedUrl, expiry_unix_secs).
+/// TTL: 60 saniye (cron 1-saniyelik tick'lerde her atışta DNS yapmaz).
+/// TTL geçince yeniden resolve → DNS rebinding window 60s'e düşer (eski sürüm
+/// her tick'te resolve idi, ki bu DNS spam + her tick'te rebinding window
+/// 0'a yakın; trade-off: spam azaltma vs rebinding window).
+pub struct PinCache {
+    inner: dashmap::DashMap<String, (PinnedUrl, u64)>,
+    ttl_secs: u64,
+}
+
+impl PinCache {
+    pub fn new(ttl_secs: u64) -> Self {
+        Self {
+            inner: dashmap::DashMap::new(),
+            ttl_secs: ttl_secs.max(1),
+        }
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    pub async fn pin_upstream(&self, url: &str) -> Result<PinnedUrl, UrlGuardError> {
+        if let Some(e) = self.inner.get(url) {
+            let (cached, exp) = e.value();
+            if Self::now() < *exp {
+                return Ok(cached.clone());
+            }
+        }
+        let pinned = pin_upstream_url(url).await?;
+        self.inner
+            .insert(url.to_string(), (pinned.clone(), Self::now() + self.ttl_secs));
+        Ok(pinned)
+    }
+}
+
+impl Default for PinCache {
+    fn default() -> Self {
+        Self::new(60)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GuardLevel {
     /// Tam SSRF koruması: loopback, RFC1918, link-local, metadata, multicast vb. block.

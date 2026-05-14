@@ -5,11 +5,13 @@ use tokio::sync::RwLock;
 
 pub struct CronScheduler {
     jobs: Arc<RwLock<Vec<CronJob>>>,
-    // Eski `client` field kaldırıldı — her tick'te URL TEKRAR pin'lenip yeni
-    // pinned client kuruluyor (DNS rebinding TOCTOU fix).
     storage: Option<Arc<crate::registry::storage::SqliteStorage>>,
     /// Aynı job'un overlapping run koruması: çalışmakta olan job id'leri.
     in_flight: Arc<dashmap::DashSet<String>>,
+    /// URL pin cache — DNS lookup spam azaltır (60s TTL). DNS rebinding
+    /// window 60s'e bağlı (kabul edilen trade-off; pure-resolve-per-tick
+    /// 0 window ama yüksek DNS QPS).
+    pin_cache: Arc<crate::alerting::url_guard::PinCache>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -89,6 +91,7 @@ impl CronScheduler {
             jobs: Arc::new(RwLock::new(Vec::new())),
             storage: None,
             in_flight: Arc::new(dashmap::DashSet::new()),
+            pin_cache: Arc::new(crate::alerting::url_guard::PinCache::new(60)),
         }
     }
 
@@ -144,6 +147,7 @@ impl CronScheduler {
 
         Self {
             jobs: Arc::new(RwLock::new(loaded_jobs)),
+            pin_cache: Arc::new(crate::alerting::url_guard::PinCache::new(60)),
             storage: Some(storage),
             in_flight: Arc::new(dashmap::DashSet::new()),
         }
@@ -245,17 +249,16 @@ impl CronScheduler {
             return;
         }
 
-        // 2. Job'ları concurrent çalıştır. Her tick'te URL TEKRAR pin'lenir —
-        // DNS rebinding TOCTOU (resolve sırasında safe IP, connect sırasında
-        // attacker IP) kapanır. validate guard handler'da yapıldı ama TOCTOU
-        // için her connect öncesi tekrar pin gerek.
+        // 2. Job'ları concurrent çalıştır. Pin cache (60s TTL) ile DNS lookup
+        // tek-saniyelik cron'larda spam yapmaz. TTL bittiğinde resolve tekrar
+        // → DNS rebinding window 60s'e bağlı (trade-off: spam vs window).
         let mut handles = Vec::with_capacity(due.len());
         for (id, url, method) in due {
             let in_flight = self.in_flight.clone();
+            let cache = self.pin_cache.clone();
             handles.push(tokio::spawn(async move {
                 let start = std::time::Instant::now();
-                // Pin (TOCTOU fix)
-                let pinned = match crate::alerting::url_guard::pin_upstream_url(&url).await {
+                let pinned = match cache.pin_upstream(&url).await {
                     Ok(p) => p,
                     Err(e) => {
                         in_flight.remove(&id);

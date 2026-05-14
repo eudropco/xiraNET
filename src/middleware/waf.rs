@@ -6,15 +6,23 @@ use std::sync::{Arc, RwLock};
 
 /// WAF input normalization — bypass variant'larını canonical form'a çevirir.
 ///
-/// 1. Percent-decode 2 pass (double-encoded `%2520` → `%20` → ` `)
+/// 1. Percent-decode fixed-point (1-4 pass; `%252525XX` triple-encoded da çözülür)
 /// 2. JSON unicode escape `\u00XX` → ASCII char (printable range)
 /// 3. C-style escape `\xXX` → ASCII char
 /// 4. Lowercase (regex (?i) ile redundant ama tutarlı canonical form)
 fn normalize_input(s: &str) -> String {
-    let pass1 = percent_decode(s);
-    let pass2 = percent_decode(&pass1);
-    let pass3 = unicode_escape_decode(&pass2);
-    pass3.to_ascii_lowercase()
+    let mut current = s.to_string();
+    // Fixed-point iteration: en fazla 4 pass, idempotent oluncaya kadar.
+    // 4 pass üzeri pathological (DoS yüzeyi) olmasın diye cap.
+    for _ in 0..4 {
+        let next = percent_decode(&current);
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    let escaped = unicode_escape_decode(&current);
+    escaped.to_ascii_lowercase()
 }
 
 fn percent_decode(s: &str) -> String {
@@ -215,11 +223,13 @@ impl Waf {
         }
     }
 
-    /// Yeni custom block pattern ekle. Geçersiz regex `Err`. Başarılıysa rule ID döner.
-    /// Bus üzerinden tüm node'lara yayılır.
+    /// Yeni custom block pattern ekle. Local atomic'ten ID alır, broadcast eder.
+    /// Multi-node: Node A id=5 publish → Node B `apply_add_pattern_with_id(5, ...)`
+    /// ile aynı ID'yi yerel state'e yazar. ID coherence garantili.
     pub fn add_custom_pattern(&self, pattern_src: &str, label: &str) -> Result<u64, String> {
-        let id = self.apply_add_pattern(pattern_src, label)?;
-        // Broadcast
+        let id = self.next_rule_id.fetch_add(1, Ordering::Relaxed);
+        self.apply_add_pattern_with_id(id, pattern_src, label)?;
+        // Broadcast — id'yi event'e dahil et, remote node aynı id ile insert.
         let bus = self.bus.read().map(|g| g.clone()).ok();
         if let Some(bus) = bus {
             let pattern_src = pattern_src.to_string();
@@ -236,17 +246,34 @@ impl Waf {
         Ok(id)
     }
 
-    /// Bus-driven apply — local state'i mutate eder ama bus'a YENİDEN yayınlamaz.
-    /// Atomic ID: `len() + 1` patterni eski sürümde race + sil/ekle çakışması
-    /// üretiyordu. `next_rule_id.fetch_add(1)` monoton + race-free.
+    /// Legacy API — id atomic'ten alınır (local-only kullanım).
+    /// Bus subscriber `apply_add_pattern_with_id` kullanmalı.
     pub fn apply_add_pattern(&self, pattern_src: &str, label: &str) -> Result<u64, String> {
+        let id = self.next_rule_id.fetch_add(1, Ordering::Relaxed);
+        self.apply_add_pattern_with_id(id, pattern_src, label)?;
+        Ok(id)
+    }
+
+    /// Bus-driven apply — id REMOTE event'ten gelir, local state'e aynısı yazılır.
+    /// Multi-node ID coherence için bu method kullanılır. Idempotent: aynı id
+    /// ile çağrılırsa duplicate skip. `next_rule_id`'i bump eder (sonraki local
+    /// add yüksek ID alsın, collision olmasın).
+    pub fn apply_add_pattern_with_id(
+        &self,
+        id: u64,
+        pattern_src: &str,
+        label: &str,
+    ) -> Result<(), String> {
         let re = Regex::new(pattern_src).map_err(|e| format!("invalid regex: {e}"))?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let id = self.next_rule_id.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.custom_patterns.write().map_err(|_| "lock poisoned")?;
+        // Idempotent — aynı id daha önce gördüysek skip (bus echo, replay)
+        if guard.iter().any(|r| r.id == id) {
+            return Ok(());
+        }
         guard.push(CustomRule {
             id,
             pattern_src: pattern_src.to_string(),
@@ -258,7 +285,13 @@ impl Waf {
             },
             created_at: now,
         });
-        Ok(id)
+        // next_rule_id'i bump et — eski sürüm "id=5 from peer" + "local next=3"
+        // race'inde gelecekteki local add aynı 5'i seçebilirdi.
+        let cur = self.next_rule_id.load(Ordering::Relaxed);
+        if id >= cur {
+            self.next_rule_id.store(id + 1, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     /// Custom pattern'i ID ile sil. Bus broadcast.
@@ -519,20 +552,17 @@ pub struct WafStats {
 }
 
 /// Bus-driven WAF rule sync. Remote node'lar rule add/remove olaylarını
-/// local pattern listesine uygular.
+/// local pattern listesine uygular. ID multi-node coherence: bus event'teki
+/// id local'e AYNISI yazılır (apply_add_pattern_with_id).
 #[async_trait::async_trait]
 impl crate::bus::BusEventHandler for Waf {
     async fn handle(&self, event: crate::bus::BusEvent) {
         match event {
-            crate::bus::BusEvent::WafRuleAdded {
-                id: _,
-                pattern,
-                label,
-            } => {
-                if let Err(e) = self.apply_add_pattern(&pattern, &label) {
-                    tracing::warn!(error = %e, pattern, "WAF: bus add failed");
+            crate::bus::BusEvent::WafRuleAdded { id, pattern, label } => {
+                if let Err(e) = self.apply_add_pattern_with_id(id, &pattern, &label) {
+                    tracing::warn!(error = %e, id, pattern, "WAF: bus add failed");
                 } else {
-                    tracing::debug!(pattern, label, "WAF: rule added via bus");
+                    tracing::debug!(id, pattern, label, "WAF: rule added via bus");
                 }
             }
             crate::bus::BusEvent::WafRuleRemoved { id } => {
