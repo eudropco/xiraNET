@@ -1,3 +1,0 @@
-{"timestamp":"2026-05-14T04:29:00.618503Z","level":"INFO","fields":{"message":"Tracing initialized: console + file (logs/xiranet.log)"},"target":"xiranet::tracing_ext","threadId":"ThreadId(1)"}
-{"timestamp":"2026-05-14T04:29:00.618688Z","level":"WARN","fields":{"message":"plugins.enabled = true but directory not found: plugins"},"target":"xira::config","threadId":"ThreadId(1)"}
-{"timestamp":"2026-05-14T04:29:00.618713Z","level":"ERROR","fields":{"message":"bus.backend =  unsupported (noop|redis)"},"target":"xira::config","threadId":"ThreadId(1)"}

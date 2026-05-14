@@ -1,2 +1,28 @@
 /target
 crates/*/target/
+
+# Local state — kullanıcı tarafından üretilir, repo'da olmamalı
+/data/
+/logs/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local secrets / env
+.env
+.env.*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Compose-generated state
+xiranet-data/
+xiranet-logs/
