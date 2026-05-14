@@ -553,30 +553,74 @@ xira admin logoff
 
 Token store öncelik: `--token` flag > `XIRA_SESSION_TOKEN` env > `~/.config/xira/session`.
 
-## Multi-node deployment notları
+## Multi-node deployment
 
-xiraNET şu anda **single-node** olarak tasarlandı. Yatay ölçeklemek için
-deployment-level çözüm gerekir; uygulama içinde session-replikasyon yoktur.
+Phase 4.4/4.5 ile xiraNET çoklu instance'la çalışabilir — Redis pub/sub
+üzerinden session invalidation ve WAF rule sync.
 
-| Sorun | Çözüm |
-|-------|-------|
-| Session validation node-local | Sticky LB (cookie/header bazlı affinity) zorunlu — örnek nginx `ip_hash` veya ALB target group stickiness |
-| Audit log her node ayrı SQLite | Remote syslog (rsyslog → SIEM) önerilir; SQLite'lar workspace-local kalır |
-| WAF custom rules node-local | Config file shared volume'da olmalı veya admin endpoint her node'a apply (Phase 4'te broadcast düşünülüyor) |
-| Sessions persistence | Her node `XIRA_DB_PATH` ayrı; restart sonrası kendi store'undan yükler |
+### Konfigürasyon
 
-Multi-node deployment'ı izlemek için Grafana'da:
+```toml
+[bus]
+backend = "redis"                      # "noop" (default, single-node) | "redis"
+redis_url = "redis://redis:6379/0"
+```
 
-- `xiranet_sessions_active{instance=...}` — her node'un aktif session sayısı.
-  Sticky LB doğru çalışıyorsa bir kullanıcının yarısı bir node'da, yarısı
-  başkasında olmamalı; spike ile detected.
-- `xiranet_http_requests_total{instance=...}` — yük dağılımı kontrolü.
-- `xiranet_db_persist_errors_total` — SQLite shared volume kullanılıyorsa
-  contention'da bu artar (uyarı: shared SQLite önerilmez).
+Backend `redis` ise boot'ta connect denenir; başarısız olursa **otomatik
+fallback** `noop` (gateway başlar, tracing error log'lar, multi-node sync yok).
 
-**Phase 4 yol haritası** (henüz implement edilmedi): Redis-backed session
-store seçeneği + WAF rule broadcast (config hot-reload üzerinden değil,
-gerçek pub/sub).
+### Çalışma mantığı
+
+| Event | Channel | Publish edilen | Local etkisi (subscriber) |
+|-------|---------|----------------|---------------------------|
+| `invalidate(token)`     | `xira:bus` | `SessionInvalidateToken { hashed_token }`     | `apply_invalidate_token` — bus broadcast etmez (loop önlemi) |
+| `invalidate_all(uid)`   | `xira:bus` | `SessionInvalidateUser { user_id }`           | `apply_invalidate_user`                                       |
+| `add_custom_pattern`    | `xira:bus` | `WafRuleAdded { id, pattern, label }`         | `apply_add_pattern` — local regex compile + insert            |
+| `remove_custom_pattern` | `xira:bus` | `WafRuleRemoved { id }`                       | `apply_remove_pattern`                                        |
+
+Self-published event'ler de dönüyor — `apply_*` fonksiyonları **idempotent**
+ve bus'a yeniden yayınlamıyor (loop fix).
+
+### Deploy mimarisi
+
+```
+   ┌──────────┐    ┌──────────┐    ┌──────────┐
+   │ xira-1   │    │ xira-2   │    │ xira-3   │
+   │ :9000    │    │ :9000    │    │ :9000    │
+   └────┬─────┘    └────┬─────┘    └────┬─────┘
+        │               │               │
+        └─────────┬─────┴───────┬───────┘
+                  │             │
+            ┌─────┴─────┐  ┌────┴────┐
+            │ Sticky LB │  │  Redis  │  ← xira:bus channel
+            │ (nginx /  │  │  pub/sub│
+            │  HAProxy) │  └─────────┘
+            └─────┬─────┘
+                  │
+              clients
+```
+
+- **Sticky LB hâlâ önerilir**: bus invalidate eventually-consistent. Round-robin
+  LB ile login'den hemen sonra istek başka node'a düşerse o node'un cache'inde
+  session yok — `validate()` SQLite'tan okuyabilir (her node'un kendi DB'si var,
+  paylaşılmıyor). Solution: shared `XIRA_DB_PATH` (NFS/EBS) veya sticky LB.
+- **Audit log** hâlâ node-local; remote sink (`[audit].webhook_url`) ile SIEM'e
+  paralel yaz.
+- **Cron scheduler** hâlâ node-local; aynı job birden fazla node'da paralel
+  tetiklenebilir — Phase 5'te leader election düşünülüyor.
+
+### CI
+
+`.github/workflows/ci.yml` `test` job'ı Redis 7 service ile koşuyor; bus
+testleri `REDIS_URL=redis://127.0.0.1:6379/0` env'ini görüp gerçek pub/sub
+roundtrip'i doğruluyor. Env yoksa testler skip'lenir (single-developer dev).
+
+### Observability
+
+- `xiranet_sessions_active{instance=...}` — sticky LB doğru çalışıyor mu kontrol
+- `xiranet_db_persist_errors_total{table="bus_publish"}` — Redis publish hatası
+- Subscriber background task disconnect'lerde exponential backoff retry'a girer;
+  log'da görünür.
 
 ## Threat model
 

@@ -6,6 +6,7 @@
 ///
 /// Opsiyonel SQLite persistence: `with_storage` ile başlatılırsa restart sonrası
 /// session'lar yüklenir + her create/invalidate persist edilir.
+use crate::bus::{BusEvent, NoOpBus, XiraBus};
 use crate::registry::storage::SqliteStorage;
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
@@ -19,6 +20,8 @@ pub struct SessionManager {
     user_sessions: DashMap<String, Vec<String>>,
     max_sessions_per_user: usize,
     storage: Option<Arc<SqliteStorage>>,
+    /// Multi-node bus — invalidate olayları yayılır.
+    bus: Arc<dyn XiraBus>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -60,7 +63,13 @@ impl SessionManager {
             user_sessions: DashMap::new(),
             max_sessions_per_user: max_sessions.max(1),
             storage: None,
+            bus: Arc::new(NoOpBus),
         }
+    }
+
+    /// Mevcut instance'a bus inject et (main.rs init zamanında).
+    pub fn set_bus(&mut self, bus: Arc<dyn XiraBus>) {
+        self.bus = bus;
     }
 
     /// SQLite persistent storage ile başlat — tabloyu oluştur, mevcut session'ları yükle.
@@ -86,6 +95,7 @@ impl SessionManager {
             user_sessions: DashMap::new(),
             max_sessions_per_user: max_sessions.max(1),
             storage: Some(storage.clone()),
+            bus: Arc::new(NoOpBus),
         };
 
         // Restart sonrası: aktif + non-expired session'ları yükle.
@@ -264,19 +274,35 @@ impl SessionManager {
         None
     }
 
-    /// Session'ı kapat (plaintext token ile)
+    /// Session'ı kapat (plaintext token ile). Multi-node deploy'de bus üzerinden
+    /// diğer node'lara yayılır.
     pub fn invalidate(&self, token: &str) -> bool {
         let hashed = hash_token(token);
-        if let Some(mut session) = self.sessions.get_mut(&hashed) {
+        let removed = self.apply_invalidate_token(&hashed);
+        if removed {
+            // Diğer node'ları bilgilendir
+            let bus = self.bus.clone();
+            let h = hashed.clone();
+            tokio::spawn(async move {
+                bus.publish(&BusEvent::SessionInvalidateToken { hashed_token: h })
+                    .await;
+            });
+        }
+        removed
+    }
+
+    /// Bus-driven remote invalidate (subscriber'dan çağrılır). Local map'i
+    /// temizler ve bus'a YENİDEN yayınlamaz.
+    pub fn apply_invalidate_token(&self, hashed: &str) -> bool {
+        if let Some(mut session) = self.sessions.get_mut(hashed) {
             session.active = false;
             let user_id = session.user_id.clone();
             drop(session);
             if let Some(mut tokens) = self.user_sessions.get_mut(&user_id) {
-                tokens.retain(|t| t != &hashed);
+                tokens.retain(|t| t != hashed);
             }
-            // Persist: tamamen sil, stale row bırakma.
-            self.delete_persisted(&hashed);
-            self.sessions.remove(&hashed);
+            self.delete_persisted(hashed);
+            self.sessions.remove(hashed);
             crate::metrics::SESSION_EVENTS
                 .with_label_values(&["invalidated"])
                 .inc();
@@ -287,8 +313,22 @@ impl SessionManager {
         }
     }
 
-    /// Kullanıcının tüm session'larını kapat (force logout) + index'i temizle
+    /// Kullanıcının tüm session'larını kapat (force logout) + bus'a yayın.
     pub fn invalidate_all(&self, user_id: &str) -> usize {
+        let count = self.apply_invalidate_user(user_id);
+        if count > 0 {
+            let bus = self.bus.clone();
+            let uid = user_id.to_string();
+            tokio::spawn(async move {
+                bus.publish(&BusEvent::SessionInvalidateUser { user_id: uid })
+                    .await;
+            });
+        }
+        count
+    }
+
+    /// Bus-driven remote invalidate-all. Yeniden yayınlamaz.
+    pub fn apply_invalidate_user(&self, user_id: &str) -> usize {
         let hashed_tokens: Vec<String> = self
             .user_sessions
             .get(user_id)
@@ -306,8 +346,8 @@ impl SessionManager {
             self.delete_persisted(hashed);
             self.sessions.remove(hashed);
         }
-        // Index'i tamamen sıfırla — invalidate_all sonrası user_sessions'ta stale entry kalmasın
         self.user_sessions.remove(user_id);
+        crate::metrics::SESSIONS_ACTIVE.set(self.active_count() as i64);
         count
     }
 
@@ -368,5 +408,31 @@ fn detect_device(ua: &str) -> String {
         "CLI/API Client".into()
     } else {
         "Desktop".into()
+    }
+}
+
+/// Bus-driven session invalidation handler. Remote node'lar bu kullanıcının/
+/// token'ın local session map'inden silinmesini sağlar.
+#[async_trait::async_trait]
+impl crate::bus::BusEventHandler for SessionManager {
+    async fn handle(&self, event: crate::bus::BusEvent) {
+        match event {
+            crate::bus::BusEvent::SessionInvalidateToken { hashed_token } => {
+                let removed = self.apply_invalidate_token(&hashed_token);
+                if removed {
+                    tracing::debug!(
+                        token_prefix = %hashed_token.chars().take(8).collect::<String>(),
+                        "session invalidated via bus"
+                    );
+                }
+            }
+            crate::bus::BusEvent::SessionInvalidateUser { user_id } => {
+                let n = self.apply_invalidate_user(&user_id);
+                if n > 0 {
+                    tracing::debug!(user_id = %user_id, count = n, "user sessions invalidated via bus");
+                }
+            }
+            _ => {} // Diğer event'ler bizi ilgilendirmez
+        }
     }
 }

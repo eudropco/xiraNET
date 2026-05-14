@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod alerting;
+pub mod bus;
 pub mod cli;
 pub mod config;
 pub mod dashboard;

@@ -248,6 +248,31 @@ async fn main() -> std::io::Result<()> {
             let shared_config = Arc::new(tokio::sync::RwLock::new(xira_config.clone()));
             let config_path = config.clone();
             xiranet::config::start_config_watcher(config_path, shared_config.clone());
+            // ═══ Multi-node bus (Phase 4.4/4.5) — Redis veya no-op ═══
+            let bus: Arc<dyn xiranet::bus::XiraBus> = match xira_config.bus.backend.as_str() {
+                "redis" => {
+                    match xiranet::bus::redis_bus::RedisBus::connect(&xira_config.bus.redis_url)
+                        .await
+                    {
+                        Ok(b) => {
+                            tracing::info!(
+                                "Multi-node bus: Redis connected ({})",
+                                xira_config.bus.redis_url
+                            );
+                            Arc::new(b)
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                "Redis bus connect failed — falling back to no-op (single-node mode)"
+                            );
+                            Arc::new(xiranet::bus::NoOpBus)
+                        }
+                    }
+                }
+                _ => Arc::new(xiranet::bus::NoOpBus),
+            };
+
             // ═══ v2.1.0 — Domain State (config-driven) ═══
             let waf_mode = if xira_config.waf.mode == "detect_only" {
                 WafMode::DetectOnly
@@ -256,6 +281,7 @@ async fn main() -> std::io::Result<()> {
             };
             let waf = Arc::new(Waf::new(xira_config.waf.enabled, waf_mode));
             waf.load_custom_patterns_from_strings(&xira_config.waf.custom_block_patterns);
+            waf.set_bus(bus.clone());
 
             start_runtime_config_sync(
                 shared_config.clone(),
@@ -324,10 +350,30 @@ async fn main() -> std::io::Result<()> {
                 storage_arc.clone(),
                 secret_box.clone(),
             ));
-            let session_manager = Arc::new(SessionManager::with_storage(
+            let mut session_mgr = SessionManager::with_storage(
                 xira_config.identity.max_sessions_per_user,
                 storage_arc.clone(),
-            ));
+            );
+            session_mgr.set_bus(bus.clone());
+            let session_manager = Arc::new(session_mgr);
+
+            // Bus subscriber: WAF + SessionManager event'lerini dinler.
+            // Redis bus ise gerçek dispatch, NoOpBus ise idle (subscriber yok).
+            if xira_config.bus.backend == "redis" {
+                // RedisBus instance'ını yeniden kur — Arc<dyn> üzerinden subscribe çağıramıyoruz,
+                // dolayısıyla subscriber için ayrı RedisBus oluştur.
+                match xiranet::bus::redis_bus::RedisBus::connect(&xira_config.bus.redis_url).await {
+                    Ok(sub_bus) => {
+                        let dispatcher = Arc::new(xiranet::bus::EventDispatcher::new(vec![
+                            session_manager.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
+                            waf.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
+                        ]));
+                        sub_bus.spawn_subscriber(dispatcher);
+                        tracing::info!("Multi-node bus subscriber started");
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Bus subscriber init failed"),
+                }
+            }
             let cron_scheduler = Arc::new(CronScheduler::with_storage(storage_arc.clone()));
             let event_bus = Arc::new(EventBus::new(10000));
             let workflow_engine = Arc::new(WorkflowEngine::new());

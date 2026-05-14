@@ -1,6 +1,7 @@
+use crate::bus::{BusEvent, NoOpBus, XiraBus};
 use regex::Regex;
 use std::collections::HashSet;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// UTF-8 boundary'i kırmadan, en fazla `max` karakter alır.
 /// `&s[..s.len().min(N)]` byte-slicing multibyte char ortasında panic yapar.
@@ -28,6 +29,7 @@ pub struct Waf {
     custom_patterns: RwLock<Vec<CustomRule>>,
     blocked_ips: HashSet<String>,
     mode: WafMode,
+    bus: RwLock<Arc<dyn XiraBus>>,
 }
 
 #[derive(Clone)]
@@ -107,11 +109,41 @@ impl Waf {
             custom_patterns: RwLock::new(Vec::new()),
             blocked_ips: HashSet::new(),
             mode,
+            bus: RwLock::new(Arc::new(NoOpBus) as Arc<dyn XiraBus>),
+        }
+    }
+
+    /// Bus inject — multi-node rule sync için.
+    pub fn set_bus(&self, bus: Arc<dyn XiraBus>) {
+        if let Ok(mut g) = self.bus.write() {
+            *g = bus;
         }
     }
 
     /// Yeni custom block pattern ekle. Geçersiz regex `Err`. Başarılıysa rule ID döner.
+    /// Bus üzerinden tüm node'lara yayılır.
     pub fn add_custom_pattern(&self, pattern_src: &str, label: &str) -> Result<u64, String> {
+        let id = self.apply_add_pattern(pattern_src, label)?;
+        // Broadcast
+        let bus = self.bus.read().map(|g| g.clone()).ok();
+        if let Some(bus) = bus {
+            let pattern_src = pattern_src.to_string();
+            let label = label.to_string();
+            tokio::spawn(async move {
+                bus.publish(&BusEvent::WafRuleAdded {
+                    id,
+                    pattern: pattern_src,
+                    label,
+                })
+                .await;
+            });
+        }
+        Ok(id)
+    }
+
+    /// Bus-driven apply — local state'i mutate eder ama bus'a YENİDEN yayınlamaz.
+    /// Idempotent: aynı id ile çağrılırsa duplicate eklenmez (id replacement).
+    pub fn apply_add_pattern(&self, pattern_src: &str, label: &str) -> Result<u64, String> {
         let re = Regex::new(pattern_src).map_err(|e| format!("invalid regex: {e}"))?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -133,8 +165,22 @@ impl Waf {
         Ok(id)
     }
 
-    /// Custom pattern'i ID ile sil.
+    /// Custom pattern'i ID ile sil. Bus broadcast.
     pub fn remove_custom_pattern(&self, id: u64) -> bool {
+        let removed = self.apply_remove_pattern(id);
+        if removed {
+            let bus = self.bus.read().map(|g| g.clone()).ok();
+            if let Some(bus) = bus {
+                tokio::spawn(async move {
+                    bus.publish(&BusEvent::WafRuleRemoved { id }).await;
+                });
+            }
+        }
+        removed
+    }
+
+    /// Bus-driven apply — yayınlamaz.
+    pub fn apply_remove_pattern(&self, id: u64) -> bool {
         let mut guard = match self.custom_patterns.write() {
             Ok(g) => g,
             Err(_) => return false,
@@ -341,4 +387,32 @@ pub struct WafStats {
     pub sqli_detected: u64,
     pub xss_detected: u64,
     pub traversal_detected: u64,
+}
+
+/// Bus-driven WAF rule sync. Remote node'lar rule add/remove olaylarını
+/// local pattern listesine uygular.
+#[async_trait::async_trait]
+impl crate::bus::BusEventHandler for Waf {
+    async fn handle(&self, event: crate::bus::BusEvent) {
+        match event {
+            crate::bus::BusEvent::WafRuleAdded {
+                id: _,
+                pattern,
+                label,
+            } => {
+                if let Err(e) = self.apply_add_pattern(&pattern, &label) {
+                    tracing::warn!(error = %e, pattern, "WAF: bus add failed");
+                } else {
+                    tracing::debug!(pattern, label, "WAF: rule added via bus");
+                }
+            }
+            crate::bus::BusEvent::WafRuleRemoved { id } => {
+                let removed = self.apply_remove_pattern(id);
+                if removed {
+                    tracing::debug!(id, "WAF: rule removed via bus");
+                }
+            }
+            _ => {}
+        }
+    }
 }

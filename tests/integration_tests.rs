@@ -1437,3 +1437,93 @@ mod audit_append_only_tests {
         assert!(result.is_ok(), "INSERT must succeed: {result:?}");
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Multi-node bus tests — REDIS_URL env varsa çalışır, yoksa skip.
+// CI'da redis service tarafından sağlanır.
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod bus_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use xiranet::bus::{BusEvent, EventDispatcher, NoOpBus, XiraBus};
+
+    #[tokio::test]
+    async fn noop_bus_publish_no_panic() {
+        let bus: Arc<dyn XiraBus> = Arc::new(NoOpBus);
+        bus.publish(&BusEvent::SessionInvalidateUser {
+            user_id: "x".into(),
+        })
+        .await;
+    }
+
+    /// Iki bağımsız Redis bağlantısı üzerinden publish→subscribe roundtrip.
+    /// `REDIS_URL` env yoksa skip.
+    #[tokio::test]
+    async fn redis_bus_publish_subscribe_roundtrip() {
+        let url = match std::env::var("REDIS_URL") {
+            Ok(u) if !u.is_empty() => u,
+            _ => {
+                eprintln!("skip: REDIS_URL not set");
+                return;
+            }
+        };
+
+        use xiranet::bus::redis_bus::RedisBus;
+
+        let pub_bus = match RedisBus::connect(&url).await {
+            Ok(b) => Arc::new(b),
+            Err(e) => panic!("publisher connect: {e}"),
+        };
+        let sub_bus = match RedisBus::connect(&url).await {
+            Ok(b) => b,
+            Err(e) => panic!("subscriber connect: {e}"),
+        };
+
+        // Handler — gelen event'leri tokio channel'a forward eder
+        struct Capture(tokio::sync::mpsc::Sender<BusEvent>);
+        #[async_trait::async_trait]
+        impl xiranet::bus::BusEventHandler for Capture {
+            async fn handle(&self, event: BusEvent) {
+                let _ = self.0.send(event).await;
+            }
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BusEvent>(10);
+        let handler: Arc<dyn xiranet::bus::BusEventHandler> = Arc::new(Capture(tx));
+        let dispatcher = Arc::new(EventDispatcher::new(vec![handler]));
+        sub_bus.spawn_subscriber(dispatcher);
+
+        // Subscriber'ın subscribe etmesi için kısa bekleme
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Publish
+        pub_bus
+            .publish(&BusEvent::WafRuleAdded {
+                id: 99,
+                pattern: "TEST-PATTERN".into(),
+                label: "bus-test".into(),
+            })
+            .await;
+
+        // Receive (3 saniye içinde)
+        let event = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("timeout waiting for bus event")
+            .expect("channel closed");
+
+        match event {
+            BusEvent::WafRuleAdded {
+                id,
+                pattern,
+                label,
+            } => {
+                assert_eq!(id, 99);
+                assert_eq!(pattern, "TEST-PATTERN");
+                assert_eq!(label, "bus-test");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+}

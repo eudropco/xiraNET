@@ -56,6 +56,31 @@ pub struct XiraConfig {
     pub cors: CorsConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub bus: BusConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BusConfig {
+    /// Multi-node coordination bus. "noop" (default, single-node) veya "redis".
+    #[serde(default = "default_bus_backend")]
+    pub backend: String,
+    /// `redis://host:port[/db]` URL'i. backend="redis" iken zorunlu.
+    #[serde(default)]
+    pub redis_url: String,
+}
+
+impl Default for BusConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_bus_backend(),
+            redis_url: String::new(),
+        }
+    }
+}
+
+fn default_bus_backend() -> String {
+    "noop".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Default, Serialize)]
@@ -748,6 +773,28 @@ impl XiraConfig {
                 .push("cache.enabled = true but cache.max_entries = 0 (cache effectively off)".into());
         }
 
+        // 10) Bus config sanity
+        match self.bus.backend.as_str() {
+            "noop" => {}
+            "redis" => {
+                if self.bus.redis_url.is_empty() {
+                    r.errors
+                        .push("bus.backend = \"redis\" requires bus.redis_url".into());
+                } else if !self.bus.redis_url.starts_with("redis://")
+                    && !self.bus.redis_url.starts_with("rediss://")
+                {
+                    r.errors.push(format!(
+                        "bus.redis_url must start with redis:// or rediss://, got: {}",
+                        self.bus.redis_url
+                    ));
+                }
+            }
+            other => {
+                r.errors
+                    .push(format!("bus.backend = {other} unsupported (noop|redis)"));
+            }
+        }
+
         r
     }
 
@@ -815,6 +862,7 @@ impl Default for XiraConfig {
             observability: ObservabilityConfig::default(),
             cors: CorsConfig::default(),
             audit: AuditConfig::default(),
+            bus: BusConfig::default(),
         }
     }
 }
