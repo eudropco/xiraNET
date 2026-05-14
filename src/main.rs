@@ -366,23 +366,14 @@ async fn main() -> std::io::Result<()> {
                 session_manager.clone(),
             ));
 
-            // Bus subscriber: WAF + SessionManager event'lerini dinler.
-            // Redis bus ise gerçek dispatch, NoOpBus ise idle (subscriber yok).
-            if xira_config.bus.backend == "redis" {
-                // RedisBus instance'ını yeniden kur — Arc<dyn> üzerinden subscribe çağıramıyoruz,
-                // dolayısıyla subscriber için ayrı RedisBus oluştur.
-                match xiranet::bus::redis_bus::RedisBus::connect(&xira_config.bus.redis_url).await {
-                    Ok(sub_bus) => {
-                        let dispatcher = Arc::new(xiranet::bus::EventDispatcher::new(vec![
-                            session_manager.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
-                            waf.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
-                        ]));
-                        sub_bus.spawn_subscriber(dispatcher);
-                        tracing::info!("Multi-node bus subscriber started");
-                    }
-                    Err(e) => tracing::warn!(error = %e, "Bus subscriber init failed"),
-                }
-            }
+            // Bus subscriber — trait method üzerinden, ek instance gerek yok.
+            // NoOpBus için no-op; RedisBus için pub/sub task spawn.
+            let dispatcher = Arc::new(xiranet::bus::EventDispatcher::new(vec![
+                session_manager.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
+                waf.clone() as Arc<dyn xiranet::bus::BusEventHandler>,
+            ]));
+            bus.spawn_subscriber(dispatcher);
+            tracing::info!("Bus subscriber registered (kind: {})", bus.kind());
             let cron_scheduler = Arc::new(CronScheduler::with_storage(storage_arc.clone()));
             let event_bus = Arc::new(EventBus::new(10000));
             let workflow_engine = Arc::new(WorkflowEngine::new());

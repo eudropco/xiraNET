@@ -4568,6 +4568,7 @@ dependencies = [
  "lru",
  "notify",
  "opentelemetry",
+ "percent-encoding",
  "prometheus",
  "prost",
  "rand 0.8.5",

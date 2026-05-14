@@ -9,9 +9,12 @@
 use crate::bus::{BusEvent, NoOpBus, XiraBus};
 use crate::registry::storage::SqliteStorage;
 use dashmap::DashMap;
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub struct SessionManager {
     /// hashed_token → session
@@ -46,10 +49,47 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// HMAC key — `XIRA_SECRETS_KEY` env'den türetilir. Lazy + cached.
+fn hmac_key() -> Option<&'static [u8; 32]> {
+    static KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
+    KEY.get_or_init(|| {
+        let pass = std::env::var("XIRA_SECRETS_KEY").ok()?;
+        if pass.len() < 32 {
+            return None;
+        }
+        if pass.len() == 64 && pass.chars().all(|c| c.is_ascii_hexdigit()) {
+            let mut k = [0u8; 32];
+            for (i, byte) in k.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&pass[i * 2..i * 2 + 2], 16).ok()?;
+            }
+            return Some(k);
+        }
+        // Passphrase → Argon2id (session-hmac domain-separated salt)
+        use argon2::{Algorithm, Argon2, Params, Version};
+        let params = Params::new(19_456, 2, 1, Some(32)).ok()?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+        let mut out = [0u8; 32];
+        argon2
+            .hash_password_into(pass.as_bytes(), b"xira-session-hmac-v1", &mut out)
+            .ok()?;
+        Some(out)
+    })
+    .as_ref()
+}
+
+/// Token hash — HMAC-SHA256 (XIRA_SECRETS_KEY varsa) veya SHA-256 fallback.
+/// HMAC: DB leak senaryosunda attacker key olmadan validate'e geçemez.
 fn hash_token(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    let mut out = String::with_capacity(64);
-    for b in digest {
+    let bytes = match hmac_key() {
+        Some(key) => {
+            let mut mac = HmacSha256::new_from_slice(key).expect("HMAC valid key");
+            mac.update(token.as_bytes());
+            mac.finalize().into_bytes().to_vec()
+        }
+        None => Sha256::digest(token.as_bytes()).to_vec(),
+    };
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in &bytes {
         use std::fmt::Write;
         let _ = write!(out, "{b:02x}");
     }
@@ -204,34 +244,50 @@ impl SessionManager {
             active: true,
         };
 
+        // Atomic two-phase: önce user_sessions entry'sini lock'la, içerde
+        // max_session enforcement yap, sonra sessions.insert. Eski sürüm
+        // sessions.insert + user_sessions.entry.push iki ayrı atomik step
+        // yapıyordu → concurrent create race: ikisi de push, ikisi de evict,
+        // yanlış token kapatılır. Yeni: tek entry lock altında atomic.
+        let evicted_old_tokens: Vec<String> = {
+            let mut user_tokens = self.user_sessions.entry(user_id.to_string()).or_default();
+            user_tokens.push(hashed.clone());
+
+            // Stale entry'leri prune et (expired/inactive)
+            let now2 = now_secs();
+            user_tokens.retain(|t| {
+                self.sessions
+                    .get(t)
+                    .map(|s| s.active && now2 <= s.expires_at)
+                    .unwrap_or(false)
+                    || t == &hashed  // yeni token henüz insert edilmedi
+            });
+
+            // Max-session enforcement — sonradan eklenmiş `hashed` listede,
+            // user_tokens.push ile. En eski(ler) kuyruğun başında.
+            let mut to_evict = Vec::new();
+            while user_tokens.len() > self.max_sessions_per_user {
+                let oldest = user_tokens.remove(0);
+                to_evict.push(oldest);
+            }
+            to_evict
+        }; // user_tokens lock burada drop edilir
+
+        // Evict edilenleri sil — lock dışında, deadlock yok
+        for old in &evicted_old_tokens {
+            if let Some(mut s) = self.sessions.get_mut(old) {
+                s.active = false;
+                let snap = s.clone();
+                drop(s);
+                self.persist(old, &snap);
+            }
+        }
+
+        // Yeni session'ı insert et + persist
         self.sessions.insert(hashed.clone(), stored.clone());
         self.persist(&hashed, &stored);
         crate::metrics::SESSION_EVENTS.with_label_values(&["created"]).inc();
         crate::metrics::SESSIONS_ACTIVE.set(self.active_count() as i64);
-
-        // User→hashed_tokens mapping
-        let mut user_tokens = self.user_sessions.entry(user_id.to_string()).or_default();
-        user_tokens.push(hashed.clone());
-
-        // Max session: en eski + inactive olanları temizle
-        // Önce zaten kapalı/expired token'ları index'ten düş
-        let now = now_secs();
-        user_tokens.retain(|t| {
-            self.sessions
-                .get(t)
-                .map(|s| s.active && now <= s.expires_at)
-                .unwrap_or(false)
-        });
-
-        while user_tokens.len() > self.max_sessions_per_user {
-            let oldest = user_tokens.remove(0);
-            if let Some(mut s) = self.sessions.get_mut(&oldest) {
-                s.active = false;
-                let snap = s.clone();
-                drop(s);
-                self.persist(&oldest, &snap);
-            }
-        }
 
         // Caller'a plaintext token'ı döndür (storage'daki hash değil)
         Session {
@@ -247,31 +303,107 @@ impl SessionManager {
         }
     }
 
-    /// Plaintext token doğrula
+    /// Plaintext token doğrula — IP/UA binding kontrolsüz (legacy API).
     pub fn validate(&self, token: &str) -> Option<Session> {
+        self.validate_with_request(token, None, None)
+    }
+
+    /// Token + IP/UA binding doğrulaması. Token theft replay savunması: kayıtlı
+    /// session IP/UA ile request'in IP/UA'sı uyuşmazsa session otomatik
+    /// invalidate edilir ve None döner.
+    ///
+    /// `expected_ip`/`expected_ua` None ise binding kontrolü yapılmaz (test
+    /// yardımı veya backward-compat). Production middleware her zaman
+    /// request'in peer_addr ve user-agent'ını geçmeli.
+    ///
+    /// last_activity update'i throttled: 30s'de bir SQLite persist'e gider
+    /// (her validate'te disk write yapma).
+    pub fn validate_with_request(
+        &self,
+        token: &str,
+        expected_ip: Option<&str>,
+        expected_ua: Option<&str>,
+    ) -> Option<Session> {
         let now = now_secs();
         let hashed = hash_token(token);
 
-        if let Some(mut session) = self.sessions.get_mut(&hashed) {
-            if !session.active || now > session.expires_at {
+        let mut session = match self.sessions.get_mut(&hashed) {
+            Some(s) => s,
+            None => {
                 crate::metrics::SESSION_EVENTS
-                    .with_label_values(&["expired"])
+                    .with_label_values(&["not_found"])
                     .inc();
                 return None;
             }
-            session.last_activity = now;
+        };
+
+        if !session.active || now > session.expires_at {
             crate::metrics::SESSION_EVENTS
-                .with_label_values(&["validated"])
+                .with_label_values(&["expired"])
                 .inc();
-            // Caller'a plaintext token'ı geri ver (kullanım kolaylığı)
-            let mut clone = session.clone();
-            clone.token = token.to_string();
-            return Some(clone);
+            return None;
         }
+
+        // IP binding — strict. Mismatch = token theft suspect → session invalidate.
+        // "unknown" placeholder veya boş → skip (login sırasında IP bilinmiyordu).
+        if let Some(ip) = expected_ip {
+            if !session.ip.is_empty()
+                && session.ip != "unknown"
+                && !ip.is_empty()
+                && session.ip != ip
+            {
+                let user_id = session.user_id.clone();
+                let stored_ip = session.ip.clone();
+                drop(session);
+                tracing::warn!(
+                    audit = "session_ip_mismatch",
+                    user_id = %user_id,
+                    stored_ip = %stored_ip,
+                    request_ip = %ip,
+                    "Session IP binding violation — token replay attempt?"
+                );
+                self.apply_invalidate_token(&hashed);
+                crate::metrics::SESSION_EVENTS
+                    .with_label_values(&["binding_violation"])
+                    .inc();
+                return None;
+            }
+        }
+        // UA binding — warn-only. Mobile cellular IP rotates but UA stays;
+        // strict UA invalidation false-positive üretir. Sadece audit trail.
+        if let Some(ua) = expected_ua {
+            if !session.user_agent.is_empty()
+                && session.user_agent != "unknown"
+                && !ua.is_empty()
+                && session.user_agent != ua
+            {
+                tracing::warn!(
+                    audit = "session_ua_mismatch",
+                    user_id = %session.user_id,
+                    "Session UA changed — possible token reuse, no auto-invalidate (fragile fingerprint)"
+                );
+                crate::metrics::SESSION_EVENTS
+                    .with_label_values(&["ua_drift"])
+                    .inc();
+            }
+        }
+
+        // last_activity throttled persist (30s)
+        let prev_activity = session.last_activity;
+        session.last_activity = now;
+        let should_persist = now.saturating_sub(prev_activity) >= 30;
+        let snap = session.clone();
+        drop(session);
+        if should_persist {
+            self.persist(&hashed, &snap);
+        }
+
         crate::metrics::SESSION_EVENTS
-            .with_label_values(&["not_found"])
+            .with_label_values(&["validated"])
             .inc();
-        None
+        let mut clone = snap;
+        clone.token = token.to_string();
+        Some(clone)
     }
 
     /// Session'ı kapat (plaintext token ile). Multi-node deploy'de bus üzerinden

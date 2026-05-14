@@ -4,6 +4,94 @@ use regex::Regex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
+/// WAF input normalization — bypass variant'larını canonical form'a çevirir.
+///
+/// 1. Percent-decode 2 pass (double-encoded `%2520` → `%20` → ` `)
+/// 2. JSON unicode escape `\u00XX` → ASCII char (printable range)
+/// 3. C-style escape `\xXX` → ASCII char
+/// 4. Lowercase (regex (?i) ile redundant ama tutarlı canonical form)
+fn normalize_input(s: &str) -> String {
+    let pass1 = percent_decode(s);
+    let pass2 = percent_decode(&pass1);
+    let pass3 = unicode_escape_decode(&pass2);
+    pass3.to_ascii_lowercase()
+}
+
+fn percent_decode(s: &str) -> String {
+    percent_encoding::percent_decode_str(s)
+        .decode_utf8_lossy()
+        .into_owned()
+}
+
+/// `\u00XX` (JSON) ve `\xXX` (C) escape sequence'larını ASCII'ye çevir.
+/// Sadece printable ASCII (0x20-0x7E) hedeflenir; non-printable atılır.
+fn unicode_escape_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // \uXXXX
+        if i + 5 < bytes.len() && bytes[i] == b'\\' && bytes[i + 1] == b'u' {
+            let hex = std::str::from_utf8(&bytes[i + 2..i + 6]).ok();
+            if let Some(h) = hex {
+                if let Ok(code) = u32::from_str_radix(h, 16) {
+                    if let Some(c) = char::from_u32(code) {
+                        out.push(c);
+                        i += 6;
+                        continue;
+                    }
+                }
+            }
+        }
+        // \xXX
+        if i + 3 < bytes.len() && bytes[i] == b'\\' && bytes[i + 1] == b'x' {
+            let hex = std::str::from_utf8(&bytes[i + 2..i + 4]).ok();
+            if let Some(h) = hex {
+                if let Ok(code) = u8::from_str_radix(h, 16) {
+                    out.push(code as char);
+                    i += 4;
+                    continue;
+                }
+            }
+        }
+        // Default — UTF-8 safe copy
+        let c = s[i..].chars().next();
+        if let Some(ch) = c {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Structured/credential-carrier header'lar — WAF regex inspection'a girmez.
+/// Bu liste request smuggling yüzeyi değil, content semantic'i; JWT/base64
+/// byte'larında SQL keyword görünüşü false-positive üretiyordu.
+fn is_structured_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "authorization"
+            | "cookie"
+            | "set-cookie"
+            | "user-agent"
+            | "x-api-key"
+            | "x-session-token"
+            | "x-request-id"
+            | "x-trace-id"
+            | "x-forwarded-for"
+            | "x-real-ip"
+            | "etag"
+            | "if-none-match"
+            | "if-match"
+            | "date"
+            | "expires"
+            | "last-modified"
+    )
+}
+
 /// UTF-8 boundary'i kırmadan, en fazla `max` karakter alır.
 /// `&s[..s.len().min(N)]` byte-slicing multibyte char ortasında panic yapar.
 fn safe_truncate(s: &str, max: usize) -> &str {
@@ -256,18 +344,43 @@ impl Waf {
             };
         }
 
-        // Tüm inputları birleştir
-        let inputs = [
+        // Input normalization — eski sürüm raw payload üzerinde regex match
+        // yapıyordu, bu yüzden URL-encoded (`%55nion`), double-encoded (`%2520`)
+        // ve unicode escape (`select`) variantlar bypass'lıyordu.
+        //
+        // Her input için: 2-pass percent-decode (double-encoding kapalı) +
+        // JSON unicode escape (`\u00XX`) → ASCII char + lowercase. Regex'lerimiz
+        // case-insensitive (?i) ama bazı pattern'ler için yine de tutarlı
+        // canonical form üretir.
+        //
+        // Original input da incele — bazı imzalar (örn. `%2e%2e/`) decoded
+        // halde görünmüyor ama traversal niyetini gösteriyor.
+        let path_norm = normalize_input(path);
+        let query_norm = normalize_input(query.unwrap_or(""));
+        let body_norm = normalize_input(body);
+
+        // Structured header'lar (Authorization, Cookie, User-Agent, X-Api-Key,
+        // X-Session-Token) regex inspection'a girmemeli — JWT/base64 random
+        // byte'ları false-positive üretir, legitimate login block edilir.
+        // Sadece "free-text" header'lar inspect ediliyor.
+        let header_values: Vec<String> = headers
+            .iter()
+            .filter(|(k, _)| !is_structured_header(k))
+            .map(|(_, v)| normalize_input(v))
+            .collect();
+
+        let raw_inputs = [
             path.to_string(),
             query.unwrap_or("").to_string(),
             body.to_string(),
         ];
+        let normalized = [path_norm, query_norm, body_norm];
 
-        // Header değerlerini de kontrol et
-        let header_values: Vec<String> = headers.iter().map(|(_, v)| v.clone()).collect();
-
-        let all_inputs: Vec<&str> = inputs
+        // Both raw + normalized: decoded form'da bypass kapalı, raw form'da
+        // `%2e%2e/` gibi niyet imzaları yakalanır.
+        let all_inputs: Vec<&str> = normalized
             .iter()
+            .chain(raw_inputs.iter())
             .chain(header_values.iter())
             .map(|s| s.as_str())
             .collect();

@@ -5,7 +5,8 @@ use tokio::sync::RwLock;
 
 pub struct CronScheduler {
     jobs: Arc<RwLock<Vec<CronJob>>>,
-    client: reqwest::Client,
+    // Eski `client` field kaldırıldı — her tick'te URL TEKRAR pin'lenip yeni
+    // pinned client kuruluyor (DNS rebinding TOCTOU fix).
     storage: Option<Arc<crate::registry::storage::SqliteStorage>>,
     /// Aynı job'un overlapping run koruması: çalışmakta olan job id'leri.
     in_flight: Arc<dashmap::DashSet<String>>,
@@ -86,11 +87,6 @@ impl CronScheduler {
     pub fn new() -> Self {
         Self {
             jobs: Arc::new(RwLock::new(Vec::new())),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
             storage: None,
             in_flight: Arc::new(dashmap::DashSet::new()),
         }
@@ -148,11 +144,6 @@ impl CronScheduler {
 
         Self {
             jobs: Arc::new(RwLock::new(loaded_jobs)),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
             storage: Some(storage),
             in_flight: Arc::new(dashmap::DashSet::new()),
         }
@@ -254,13 +245,30 @@ impl CronScheduler {
             return;
         }
 
-        // 2. Job'ları concurrent çalıştır
+        // 2. Job'ları concurrent çalıştır. Her tick'te URL TEKRAR pin'lenir —
+        // DNS rebinding TOCTOU (resolve sırasında safe IP, connect sırasında
+        // attacker IP) kapanır. validate guard handler'da yapıldı ama TOCTOU
+        // için her connect öncesi tekrar pin gerek.
         let mut handles = Vec::with_capacity(due.len());
         for (id, url, method) in due {
-            let client = self.client.clone();
             let in_flight = self.in_flight.clone();
             handles.push(tokio::spawn(async move {
                 let start = std::time::Instant::now();
+                // Pin (TOCTOU fix)
+                let pinned = match crate::alerting::url_guard::pin_upstream_url(&url).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        in_flight.remove(&id);
+                        return (id, 0.0, Err(format!("URL pin failed: {e}")));
+                    }
+                };
+                let client = match pinned.build_client(30) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        in_flight.remove(&id);
+                        return (id, 0.0, Err(format!("client build: {e}")));
+                    }
+                };
                 let result = match method.to_uppercase().as_str() {
                     "POST" => client.post(&url).send().await,
                     "PUT" => client.put(&url).send().await,

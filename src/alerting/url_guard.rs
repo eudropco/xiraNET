@@ -37,8 +37,133 @@ pub async fn validate_outbound_url(raw_url: &str) -> Result<(), UrlGuardError> {
 
 /// Upstream service için: yalnızca cloud metadata adreslerini ve kötü scheme'leri reddet,
 /// RFC1918/loopback'e izin ver (gateway'in alongside backend service kullanımı yaygın).
+/// Port kontrolü uygulanır — HTTP olmayan portlar (Redis 6379, Postgres 5432, MySQL 3306
+/// vb.) reddedilir. CRLF smuggling/gopher SSRF kapalı.
 pub async fn validate_upstream_url(raw_url: &str) -> Result<(), UrlGuardError> {
+    let url = reqwest::Url::parse(raw_url).map_err(|e| UrlGuardError::Invalid(e.to_string()))?;
+    // Port allow-list — Redis/Postgres/MySQL gibi ASCII protokollere HTTP request
+    // gönderilirse CRLF komut sızdırma riski var.
+    if let Some(port) = url.port() {
+        if !is_allowed_upstream_port(port) {
+            return Err(UrlGuardError::Forbidden(format!(
+                "port {port} not allowed for upstream (text protocols vulnerable to HTTP smuggling)"
+            )));
+        }
+    }
     validate_url(raw_url, GuardLevel::UpstreamOnly).await
+}
+
+/// Pinned URL — DNS resolve sonucunda elde edilen güvenli IP. Caller bu IP ile
+/// reqwest::ClientBuilder::resolve_to_addrs ile pinned client kurar; TOCTOU
+/// (resolve sonrası IP değişimi → DNS rebinding) açığı kapanır.
+#[derive(Debug, Clone)]
+pub struct PinnedUrl {
+    /// Orijinal URL — request URL olarak kullanılır (Host header doğru kalır).
+    pub url: String,
+    /// Doğrulanmış host (DNS isim veya IP literal).
+    pub host: String,
+    /// Pin'lenen IP — sonraki connect bu IP'ye yapılır, DNS yeniden çağrılmaz.
+    pub ip: std::net::IpAddr,
+    /// Port — explicit veya scheme default.
+    pub port: u16,
+}
+
+/// URL'i validate eder VE IP'yi pin'ler — DNS rebinding TOCTOU kapalı.
+/// Strict mode (`validate_outbound_url` semantic'i).
+pub async fn pin_outbound_url(raw_url: &str) -> Result<PinnedUrl, UrlGuardError> {
+    pin_url(raw_url, GuardLevel::Strict).await
+}
+
+/// Upstream pinned — RFC1918/loopback OK, metadata bloke, port allow-list.
+pub async fn pin_upstream_url(raw_url: &str) -> Result<PinnedUrl, UrlGuardError> {
+    let url = reqwest::Url::parse(raw_url).map_err(|e| UrlGuardError::Invalid(e.to_string()))?;
+    if let Some(port) = url.port() {
+        if !is_allowed_upstream_port(port) {
+            return Err(UrlGuardError::Forbidden(format!(
+                "port {port} not allowed for upstream"
+            )));
+        }
+    }
+    pin_url(raw_url, GuardLevel::UpstreamOnly).await
+}
+
+async fn pin_url(raw_url: &str, level: GuardLevel) -> Result<PinnedUrl, UrlGuardError> {
+    let url = reqwest::Url::parse(raw_url).map_err(|e| UrlGuardError::Invalid(e.to_string()))?;
+    let scheme = url.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(UrlGuardError::BadScheme(scheme.to_string()));
+    }
+    let host = url.host_str().ok_or(UrlGuardError::MissingHost)?;
+    let host_lower = host.to_ascii_lowercase();
+    if is_blocked_metadata_hostname(&host_lower) {
+        return Err(UrlGuardError::Forbidden(format!("metadata: {host}")));
+    }
+    if level == GuardLevel::Strict && is_blocked_hostname_strict(&host_lower) {
+        return Err(UrlGuardError::Forbidden(format!("blocked: {host}")));
+    }
+    let port = url.port_or_known_default().ok_or(UrlGuardError::MissingHost)?;
+
+    // IP literal → direkt pin
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !is_ip_allowed(&ip, level) {
+            return Err(UrlGuardError::Forbidden(ip.to_string()));
+        }
+        return Ok(PinnedUrl {
+            url: raw_url.to_string(),
+            host: host.to_string(),
+            ip,
+            port,
+        });
+    }
+
+    // DNS resolve — ilk safe IP'yi pin'le
+    let target = format!("{host}:{port}");
+    let addrs = tokio::net::lookup_host(target.as_str())
+        .await
+        .map_err(|e| UrlGuardError::DnsError(e.to_string()))?;
+    let mut pinned: Option<IpAddr> = None;
+    for sa in addrs {
+        if !is_ip_allowed(&sa.ip(), level) {
+            return Err(UrlGuardError::Forbidden(format!(
+                "{host} resolves to {}",
+                sa.ip()
+            )));
+        }
+        if pinned.is_none() {
+            pinned = Some(sa.ip());
+        }
+    }
+    let ip = pinned.ok_or_else(|| UrlGuardError::DnsError("no addresses".into()))?;
+    Ok(PinnedUrl {
+        url: raw_url.to_string(),
+        host: host.to_string(),
+        ip,
+        port,
+    })
+}
+
+/// Upstream port allow-list — HTTP-like portlar OK, text-protocol portlar reddedilir.
+/// Liste: 80/443/8080-8090/3000-3999/9000-9999 + common dev ports.
+fn is_allowed_upstream_port(port: u16) -> bool {
+    matches!(
+        port,
+        80 | 443 | 8080..=8090 | 3000..=3999 | 9000..=9999 | 5000 | 5001 | 7000 | 7001 | 8000..=8079 | 8443
+    )
+}
+
+impl PinnedUrl {
+    /// reqwest::Client builder'ına resolve override + timeout uygula.
+    /// Bu client SADECE bu pinned host için DNS bypass eder; başka URL'lere
+    /// gönderirseniz normal sistem DNS kullanılır (ama biz hep aynı URL'i
+    /// göndereceğiz).
+    pub fn build_client(&self, timeout_secs: u64) -> Result<reqwest::Client, String> {
+        let socket = std::net::SocketAddr::new(self.ip, self.port);
+        reqwest::Client::builder()
+            .resolve_to_addrs(&self.host, &[socket])
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .build()
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

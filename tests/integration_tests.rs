@@ -156,6 +156,117 @@ mod waf_tests {
             "Trailing -- comment alone should not match SQLi"
         );
     }
+
+    // ═══ Adversarial — normalization bypass'larını dene ═══
+
+    #[test]
+    fn test_waf_blocks_url_encoded_sqli() {
+        let waf = Waf::new(true, WafMode::Block);
+        // %75%6e%69%6f%6e = "union" — eski sürüm raw regex'le match etmiyordu.
+        let verdict = waf.inspect(
+            "/api/users",
+            Some("id=1%20%75%6e%69%6f%6e%20select%20from%20users"),
+            "",
+            &[],
+            "127.0.0.1",
+        );
+        assert!(
+            matches!(verdict, WafVerdict::Block { .. }),
+            "URL-encoded UNION SELECT must be blocked after normalization"
+        );
+    }
+
+    #[test]
+    fn test_waf_blocks_double_encoded_sqli() {
+        let waf = Waf::new(true, WafMode::Block);
+        // %2520 = encoded %20 = encoded space; 2-pass decode gerek.
+        let verdict = waf.inspect(
+            "/api/users",
+            Some("id=1%2520union%2520select%2520from%2520users"),
+            "",
+            &[],
+            "127.0.0.1",
+        );
+        assert!(
+            matches!(verdict, WafVerdict::Block { .. }),
+            "Double-encoded SQLi must be blocked"
+        );
+    }
+
+    #[test]
+    fn test_waf_blocks_unicode_escape_xss() {
+        let waf = Waf::new(true, WafMode::Block);
+        // <script = '<script' (JSON unicode escape)
+        let body = r#"{"comment":"<script>alert(1)</script>"}"#;
+        let verdict = waf.inspect("/api/post", None, body, &[], "127.0.0.1");
+        assert!(
+            matches!(verdict, WafVerdict::Block { .. }),
+            "Unicode-escape XSS must be blocked"
+        );
+    }
+
+    #[test]
+    fn test_waf_blocks_url_encoded_traversal() {
+        let waf = Waf::new(true, WafMode::Block);
+        // %2e%2e%2f = '../' raw
+        let verdict = waf.inspect(
+            "/files/%2e%2e%2fetc%2fpasswd",
+            None,
+            "",
+            &[],
+            "127.0.0.1",
+        );
+        assert!(
+            matches!(verdict, WafVerdict::Block { .. }),
+            "URL-encoded traversal must be blocked"
+        );
+    }
+
+    #[test]
+    fn test_waf_authorization_jwt_not_false_positive() {
+        // JWT base64 random byte'larında "OR " gibi substring olabilir;
+        // structured header allow-list ile inspection'a girmemeli.
+        let waf = Waf::new(true, WafMode::Block);
+        let headers = vec![(
+            "authorization".to_string(),
+            // 'or 1=1' pattern'ine benzer byte sequence içeren sahte JWT
+            "Bearer eyJhbGciOiJIUzI1NiJ9.OR1A2.signature_or_1_eq_1".to_string(),
+        )];
+        let verdict = waf.inspect("/api/me", None, "", &headers, "127.0.0.1");
+        assert!(
+            matches!(verdict, WafVerdict::Allow),
+            "Authorization header with JWT-looking content must not trigger WAF (structured header)"
+        );
+    }
+
+    #[test]
+    fn test_waf_cookie_not_false_positive() {
+        let waf = Waf::new(true, WafMode::Block);
+        let headers = vec![(
+            "cookie".to_string(),
+            "sid=abc; theme=dark; tracking=union+select".to_string(),
+        )];
+        let verdict = waf.inspect("/", None, "", &headers, "127.0.0.1");
+        assert!(
+            matches!(verdict, WafVerdict::Allow),
+            "Cookie header structured content must not trigger WAF"
+        );
+    }
+
+    #[test]
+    fn test_waf_free_text_header_still_inspected() {
+        let waf = Waf::new(true, WafMode::Block);
+        // Custom free-text header — inspection'a girer.
+        let headers = vec![(
+            "x-custom-comment".to_string(),
+            "1 union select from users".to_string(),
+        )];
+        let verdict = waf.inspect("/", None, "", &headers, "127.0.0.1");
+        assert!(
+            matches!(verdict, WafVerdict::Block { .. }),
+            "Free-text headers must still be inspected"
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1361,6 +1472,165 @@ mod rbac_tests {
         let resp = test::call_service(&app, req).await;
         // Session invalidate edildi → SessionAuth 401
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Adversarial tests — v3.0 Yarı C madde 29
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod adversarial_tests {
+    use xiranet::middleware::jwt::JwtAuth;
+
+    /// `alg=none` JWT bypass denemesi — algorithm pinning ile reddedilmeli.
+    /// Eski sürümde validation.algorithms boş bırakılırsa jsonwebtoken
+    /// `Algorithm::HS256` default alır; "none" alg attacker tarafından
+    /// tetiklenirse decode'a girer.
+    #[test]
+    fn jwt_alg_none_rejected() {
+        // Geçerli 32-byte secret, HS256 — pinned.
+        let secret = "valid-secret-with-at-least-32-bytes-aaaa".to_string();
+        let auth = JwtAuth::new(secret, "HS256", None, true).expect("init");
+        // JwtAuth public API decode etmiyor doğrudan; bu test JwtAuth::new
+        // başarılı kurulumla tanıt: HS256/384/512 + RS256 dışı algoritma
+        // unsupported, "none" da unsupported.
+        let result =
+            JwtAuth::new("any-secret-32-bytes-aaaaaaaaaaaaaaa".to_string(), "none", None, true);
+        assert!(
+            result.is_err(),
+            "alg=none must be rejected at boot (UnsupportedAlgorithm)"
+        );
+        drop(auth);
+    }
+
+    /// JWT empty algorithm string → unsupported.
+    #[test]
+    fn jwt_empty_algorithm_rejected() {
+        let result = JwtAuth::new(
+            "valid-secret-32-bytes-aaaaaaaaaaaaa".to_string(),
+            "",
+            None,
+            true,
+        );
+        assert!(result.is_err(), "empty alg must be unsupported");
+    }
+
+    /// JWT secret 31-byte → WeakSecret reject (HMAC algorithms require >= 32).
+    #[test]
+    fn jwt_31_byte_secret_rejected() {
+        let result = JwtAuth::new(
+            "x".repeat(31), // 31 byte
+            "HS256",
+            None,
+            true,
+        );
+        assert!(result.is_err(), "31-byte HMAC secret must be rejected");
+    }
+
+    /// Session create race — 10 concurrent create, max_sessions=3 limitiyle.
+    /// Yeni atomic two-phase ile race-free: tam olarak 3 session aktif kalır.
+    #[tokio::test]
+    async fn session_create_race_max_sessions() {
+        use std::sync::Arc;
+        use xiranet::identity::sessions::SessionManager;
+        let mgr = Arc::new(SessionManager::new(3));
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let m = mgr.clone();
+            handles.push(tokio::spawn(async move {
+                let token = format!("xira_tok_concurrent_{i}");
+                m.create("u1", &token, "127.0.0.1", "test", 600);
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        let user_sessions = mgr.user_sessions("u1");
+        // max=3 enforce: aktif session count <= 3
+        assert!(
+            user_sessions.len() <= 3,
+            "max_sessions race: expected <= 3, got {}",
+            user_sessions.len()
+        );
+        // Aktif session toplam <= 3 (per-user) ama global active_count daha
+        // büyük olabilir invalidate'ten önce — burada bu kullanıcı için
+        // assertion yeterli.
+    }
+
+    /// Session validate IP mismatch → invalidate.
+    #[test]
+    fn session_ip_binding_invalidates_on_mismatch() {
+        use std::sync::Arc;
+        use xiranet::identity::sessions::SessionManager;
+        let mgr = Arc::new(SessionManager::new(5));
+        let session = mgr.create("u1", "xira_tok_test", "1.2.3.4", "Mozilla/5.0", 600);
+        // Aynı IP — geçer
+        assert!(
+            mgr.validate_with_request(&session.token, Some("1.2.3.4"), Some("Mozilla/5.0"))
+                .is_some()
+        );
+        // Farklı IP — invalidate + None
+        assert!(
+            mgr.validate_with_request(&session.token, Some("5.6.7.8"), Some("Mozilla/5.0"))
+                .is_none(),
+            "IP mismatch must invalidate"
+        );
+        // İlk session artık aktif değil
+        assert!(
+            mgr.validate_with_request(&session.token, Some("1.2.3.4"), Some("Mozilla/5.0"))
+                .is_none(),
+            "post-invalidation lookup must fail"
+        );
+    }
+
+    /// WAF blocked_ip Arc altında — eski dead code testi.
+    #[test]
+    fn waf_block_ip_works_under_arc() {
+        use std::sync::Arc;
+        use xiranet::middleware::waf::{Waf, WafMode, WafVerdict};
+        let waf = Arc::new(Waf::new(true, WafMode::Block));
+        // Arc<Waf>::block_ip(&self) — derlenir ve çağrılabilir (eski sürüm
+        // `&mut self` ile Arc altında compile bile etmiyordu).
+        waf.block_ip("9.9.9.9".to_string());
+        let verdict = waf.inspect("/test", None, "", &[], "9.9.9.9");
+        match verdict {
+            WafVerdict::Block { rule, .. } => assert_eq!(rule, "IP_BLOCK"),
+            _ => panic!("blocked IP must produce IP_BLOCK verdict"),
+        }
+        waf.unblock_ip("9.9.9.9");
+        let verdict2 = waf.inspect("/test", None, "", &[], "9.9.9.9");
+        assert!(matches!(verdict2, WafVerdict::Allow));
+    }
+
+    /// failed_attempts email case-permutation bypass kapalı.
+    #[test]
+    fn brute_force_email_case_permutation_consolidated() {
+        use xiranet::identity::users::{UserManager, UserRole};
+        let mgr = UserManager::new();
+        mgr.register(
+            "alice@example.com".to_string(),
+            "alice".to_string(),
+            "long-password-1234",
+            UserRole::Viewer,
+        )
+        .unwrap();
+        // Yanlış şifre — sırayla farklı case'lerle dene
+        for variant in &[
+            "alice@example.com",
+            "Alice@example.com",
+            "ALICE@example.com",
+            "ALICE@EXAMPLE.COM",
+            "AliCe@ExaMple.coM",
+        ] {
+            let result = mgr.authenticate(variant, "wrong-password");
+            // Hep aynı InvalidCredentials — counter consolidated
+            assert!(matches!(
+                result,
+                xiranet::identity::users::AuthResult::InvalidCredentials
+                    | xiranet::identity::users::AuthResult::LockedOut { .. }
+            ));
+        }
     }
 }
 

@@ -41,6 +41,10 @@ pub trait XiraBus: Send + Sync {
     async fn publish(&self, event: &BusEvent);
     /// Bus tipi (no-op vs redis) — observability için.
     fn kind(&self) -> &'static str;
+    /// Subscriber background task'ını başlat. NoOpBus için no-op döner.
+    /// Bu method trait'te olduğu için main.rs ayrı bir RedisBus instance'ı
+    /// oluşturmak zorunda kalmıyor — v3.0 audit Yarı B madde 25.
+    fn spawn_subscriber(&self, dispatcher: Arc<EventDispatcher>);
 }
 
 /// Multi-node coordination kapalıyken (single-node) kullanılan no-op.
@@ -51,6 +55,9 @@ impl XiraBus for NoOpBus {
     async fn publish(&self, _event: &BusEvent) {}
     fn kind(&self) -> &'static str {
         "noop"
+    }
+    fn spawn_subscriber(&self, _dispatcher: Arc<EventDispatcher>) {
+        // single-node: subscriber yok, dispatcher unused
     }
 }
 

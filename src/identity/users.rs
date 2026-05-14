@@ -583,9 +583,33 @@ impl UserManager {
     }
 
     pub fn update_role(&self, id: &str, role: UserRole) -> bool {
+        let (old_role, email) = match self.users.get(id) {
+            Some(u) => (format!("{:?}", u.role), u.email.clone()),
+            None => return false,
+        };
         if let Some(mut user) = self.users.get_mut(id) {
-            user.role = role;
+            user.role = role.clone();
             self.persist_user(&user);
+            // Privilege change audit row — `events` tablosuna append-only
+            // (audit_log trigger değil ama events de tamper-resistant tutulmak
+            // istenirse benzer trigger uygulanabilir; şimdilik tracing + row).
+            if let Some(ref s) = self.storage {
+                if let Err(e) = s.log_event(
+                    "identity.role_changed",
+                    Some(id),
+                    Some(&email),
+                    &format!("role: {} → {}", old_role, role.as_str()),
+                ) {
+                    tracing::warn!(error = %e, "log_event(role_changed) failed");
+                }
+            }
+            tracing::warn!(
+                audit = "role_change",
+                user_id = %id,
+                email = %email,
+                old_role = %old_role,
+                new_role = %role.as_str(),
+            );
             true
         } else {
             false
@@ -635,11 +659,20 @@ impl UserManager {
 }
 
 /// Hash password with Argon2id (production-grade)
+/// Argon2 parametreleri — explicit pin. argon2 crate default'u upgrade ederse
+/// timing equalization bozulmasın (dummy hash ile live hash farklı parameter
+/// pencerelerinde olamaz). v3.0 audit Yarı B madde 22.
+fn argon2_pinned() -> argon2::Argon2<'static> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    // OWASP minimum: m=19456 KB, t=2, p=1
+    let params = Params::new(19_456, 2, 1, None).expect("argon2 params");
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+}
+
 fn hash_password(password: &str) -> String {
-    use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+    use argon2::{password_hash::SaltString, PasswordHasher};
     let salt = SaltString::generate(&mut rand::thread_rng());
-    let argon2 = Argon2::default();
-    argon2
+    argon2_pinned()
         .hash_password(password.as_bytes(), &salt)
         .expect("Argon2 hash failed")
         .to_string()
@@ -648,20 +681,20 @@ fn hash_password(password: &str) -> String {
 /// Verify password — Argon2id only. Legacy hash formatları reddedilir.
 fn verify_password(password: &str, stored: &str) -> bool {
     if !stored.starts_with("$argon2") {
-        // Argon2 olmayan tüm formatlar reddedilir (legacy DefaultHasher dahil).
-        // Bu kullanıcılar admin tarafından sıfırlanmalı.
         return false;
     }
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
+    use argon2::{PasswordHash, PasswordVerifier};
     let parsed = match PasswordHash::new(stored) {
         Ok(h) => h,
         Err(_) => return false,
     };
-    Argon2::default()
+    argon2_pinned()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok()
 }
 
-/// Constant-cost dummy hash, kullanıcı yokken timing eşitlemesi için.
-/// "dummy_password" için Argon2id default parametreleriyle hesaplanmış sabit hash.
+/// Constant-cost dummy hash — kullanıcı yokken timing eşitlemesi için.
+/// Pinned params (m=19456, t=2, p=1) ile hesaplanmış sabit hash; argon2 crate
+/// default'u upgrade etse bile dummy + live aynı parameter penceresinde kalır
+/// → account enumeration timing attack kapalı.
 const DUMMY_ARGON2_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$Ck5kQ7BkVZx2g4Cv9b4GZ1QF5mHRT7FzfA8YV2W6cKw";

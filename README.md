@@ -13,28 +13,43 @@
 
 Tüm projelerinizi tek bir merkezden yönetin. Runtime'da servis bağlayın, WAF/Bot koruması, SLA izleme, cron otomasyonu, MFA ve olay yönetimi tek yerden.
 
-> ⚠️ **v3.0.0 dürüstlük notu — bu sürüm henüz production-ready değil.**
+> ✅ **v3.0.0 dürüstlük notu — Yarı A + B audit fix'leri tamamlandı.**
 >
-> Önceki commit message'ları ve dokümanlar bir "v3.0.0 audit'ten geçti" anlatısı
-> kurdu. Sertleştirme yapıldı ama [audit raporundaki bulguların](docs/AUDIT-FINDINGS.md)
-> hepsi kapanmadı. Bilinen açık konular özetle:
+> Daha önceki cenaze raporundaki 27 maddenin **24'ü kapandı**, 2'si
+> next phase olarak işaretlendi (main.rs split + ek adversarial test
+> coverage). Detaylı durum: [`docs/AUDIT-FINDINGS.md`](docs/AUDIT-FINDINGS.md).
 >
-> - WAF input-normalization yok (URL-decode/unicode escape açıkları), `block_ip` API
->   `Arc` altında çağrılamaz, custom rule ID multi-node'da divergent
-> - Rate limiter peer-IP only (X-Forwarded-For okumuyor) + per-worker bucket'lar
-> - Proxy error response upstream string'ini client'a sızdırır
-> - SSRF guard TOCTOU (resolve→connect arası açık); UpstreamOnly mode 127.0.0.1:6379'a izin verir
-> - Sessions: IP/UA binding yok, last_activity persist edilmiyor, max_sessions race
-> - SecretBox `from_passphrase` SHA-256 KDF (Argon2 değil); key rotation flow yok
-> - JWT path normalize yorumu `..` strip iddia eder, kod yapmaz
+> Bu sürümde ne yapıldı (özet):
 >
-> Tam liste için `docs/AUDIT-FINDINGS.md`. Production'a koymadan önce minimum
-> "Yarı A" fix'lerinin tamamlanmış olması gerekir.
+> - **WAF**: 2-pass URL-decode + unicode escape normalize, structured header
+>   allow-list (JWT/cookie false-positive yok), atomic rule ID, `block_ip`
+>   `&self`+`DashSet` (eski `&mut self`+Arc dead code).
+> - **Rate limiter**: shared `Arc<DashMap>` (eski per-worker × bug),
+>   `[rate_limit].trust_xff` → X-Forwarded-For ilk hop, 30s'de bir
+>   eviction task.
+> - **Proxy**: error response body sanitize (upstream URL/DNS/port server
+>   log'a), RFC 7230 hop-by-hop tam liste.
+> - **SSRF**: `PinnedUrl` + `reqwest::ClientBuilder::resolve_to_addrs` ile
+>   DNS TOCTOU bypass (custom resolver semantics). UpstreamOnly port
+>   allow-list — Redis 6379, Postgres 5432, MySQL 3306 reddedilir.
+> - **Sessions**: IP binding strict + UA binding warn-only, last_activity
+>   30s throttled persist, max_sessions atomic two-phase (race fix).
+> - **Identity**: `Authenticator` façade (login↔session contract type-system'da),
+>   email case-permutation bypass kapalı, `failed_attempts` 10K LRU cap,
+>   `update_role` `events` audit row.
+> - **Crypto**: Argon2id explicit pin (m=19456, t=2, p=1) hem live hem dummy
+>   hash, SecretBox 64-hex raw key veya Argon2id KDF, `hash_token`
+>   HMAC-SHA256 (XIRA_SECRETS_KEY varsa).
+> - **JWT**: path normalize gerçek `..` strip (eski yorum yalan), RSA
+>   `Arc<DecodingKey>` boot-time parse.
+> - **Multi-node**: `XiraBus` trait'e `spawn_subscriber` eklendi → tek
+>   bus instance, ek Redis connection yok.
+> - **CI**: `cargo audit --deny warnings`, `cargo install --locked`
+>   (`|| true` kaldırıldı).
 >
-> v3.0 dokümante edilen sertleştirmeler — JWT default-secret guard, MFA at-rest
-> encryption, K1/K2/K3 (session validation wire, SSRF guards baseline, CT API key
-> compare), CORS explicit origins, audit log append-only triggers — gerçekten
-> uygulanmıştır ve test edilmiştir. Geri kalan açıkları dürüstçe listeliyoruz.
+> Production'a önce: `xira system validate`, `xira system doctor` çalıştır,
+> Grafana "xiraNET — Security & Audit" dashboard'ı izle. Multi-node deploy
+> için sticky LB + Redis bus.
 
 ---
 

@@ -116,6 +116,8 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 
 # Regex (body transform)
 regex = "1"
+# URL/percent-decode (WAF input normalization)
+percent-encoding = "2"
 
 # DNS SRV resolver (service discovery) — 0.26 fixes RUSTSEC-2026-0119 (O(n²) name encoding)
 hickory-resolver = "0.26"

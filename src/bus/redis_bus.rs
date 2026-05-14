@@ -35,9 +35,8 @@ impl RedisBus {
         })
     }
 
-    /// Subscriber task'ını başlat. `dispatcher` gelen event'leri yerel state'e
-    /// işler. Self-published event'ler de yayılır — handler'lar idempotent olmalı.
-    pub fn spawn_subscriber(&self, dispatcher: Arc<EventDispatcher>) {
+    /// Inherent — trait method backward-compat alias.
+    fn spawn_subscriber_inner(&self, dispatcher: Arc<EventDispatcher>) {
         let url = self.url.clone();
         tokio::spawn(async move {
             let mut backoff_secs = 1u64;
@@ -122,5 +121,9 @@ impl XiraBus for RedisBus {
 
     fn kind(&self) -> &'static str {
         "redis"
+    }
+
+    fn spawn_subscriber(&self, dispatcher: Arc<EventDispatcher>) {
+        self.spawn_subscriber_inner(dispatcher);
     }
 }

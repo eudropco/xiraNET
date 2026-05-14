@@ -33,14 +33,15 @@ pub struct JwtClaims {
 }
 
 /// JWT secret/key materyali — algoritmaya göre HMAC byte'ları veya RSA PEM.
+/// v3.0 audit fix (Yarı B madde 20): RS256 için DecodingKey artık boot'ta tek
+/// kere parse edilip `Arc`'a sarılıyor; her validate'te yeniden PEM parse
+/// (hot-path overhead) yok.
 #[derive(Clone)]
 enum JwtKey {
     /// HMAC algoritmaları için byte secret. Validate'te `from_secret`.
     Hmac(Arc<Vec<u8>>),
-    /// RS256 için pre-parsed public key. `Arc<Vec<u8>>` PEM, lazy parse'tan kaçınmak için
-    /// `DecodingKey` saklıyoruz — `DecodingKey` `Clone` değil, bu yüzden PEM'i tutup
-    /// her validate'te parse etmek istemiyoruz; Arc + DecodingKey'i Once'de yarat.
-    RsaPem(Arc<Vec<u8>>),
+    /// RS256: boot'ta parse edilmiş `DecodingKey`, Arc-clonable.
+    RsaPem(Arc<DecodingKey>),
 }
 
 /// JWT Authentication middleware
@@ -95,13 +96,9 @@ impl JwtAuth {
             other => return Err(JwtInitError::UnsupportedAlgorithm(other.to_string())),
         };
 
-        // Disabled iken validation çalışmıyor — secret'a dair guard'ı atla,
-        // ama yine de struct'ı kur ki config kalıbı bozulmasın.
+        // Disabled iken validation çalışmıyor; struct dummy HMAC ile kurulur.
         if !enabled {
-            let key = match algorithm {
-                Algorithm::RS256 => JwtKey::RsaPem(Arc::new(secret.into_bytes())),
-                _ => JwtKey::Hmac(Arc::new(secret.into_bytes())),
-            };
+            let key = JwtKey::Hmac(Arc::new(secret.into_bytes()));
             return Ok(Self {
                 key,
                 algorithm,
@@ -123,11 +120,11 @@ impl JwtAuth {
                 JwtKey::Hmac(Arc::new(secret.into_bytes()))
             }
             Algorithm::RS256 => {
-                // PEM'i şimdi parse ederek başlangıçta hata ver.
-                let bytes = secret.into_bytes();
-                DecodingKey::from_rsa_pem(&bytes)
+                // Boot'ta TEK kere parse + Arc'a sar. Validate hot-path'ta yeniden
+                // parse YOK — eski sürüm her isteğe PEM parse ediyordu.
+                let dk = DecodingKey::from_rsa_pem(secret.as_bytes())
                     .map_err(|e| JwtInitError::InvalidRsaPem(e.to_string()))?;
-                JwtKey::RsaPem(Arc::new(bytes))
+                JwtKey::RsaPem(Arc::new(dk))
             }
             _ => return Err(JwtInitError::UnsupportedAlgorithm(format!("{algorithm:?}"))),
         };
@@ -246,27 +243,16 @@ where
             validation.validate_aud = false;
         }
 
-        let key = match &self.key {
-            JwtKey::Hmac(b) => DecodingKey::from_secret(b),
-            JwtKey::RsaPem(pem) => {
-                // Pre-parsed at boot, ama DecodingKey Clone değil — burada tekrar yükle.
-                // Alternatif: OnceLock ile cache. Validate hot-path olmadığı için inline.
-                match DecodingKey::from_rsa_pem(pem) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        tracing::error!(error = %e, "JWT RSA PEM unexpectedly invalid at runtime");
-                        return Box::pin(async move {
-                            let response = HttpResponse::Unauthorized().json(serde_json::json!({
-                                "error": "Invalid or expired token"
-                            }));
-                            Ok(req.into_response(response).map_into_right_body())
-                        });
-                    }
-                }
+        // Boot'ta parse edilen key — RSA için PEM parse hot-path'ta YOK.
+        let decode_result = match &self.key {
+            JwtKey::Hmac(b) => {
+                let key = DecodingKey::from_secret(b);
+                decode::<JwtClaims>(&token, &key, &validation)
             }
+            JwtKey::RsaPem(dk) => decode::<JwtClaims>(&token, dk.as_ref(), &validation),
         };
 
-        match decode::<JwtClaims>(&token, &key, &validation) {
+        match decode_result {
             Ok(_token_data) => {
                 let fut = self.service.call(req);
                 Box::pin(async move {

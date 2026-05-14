@@ -87,9 +87,25 @@ where
                     .map(|s| s.to_string())
             });
 
+        // Request IP/UA — session binding doğrulama için
+        let req_ip = req
+            .peer_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
+        let req_ua = req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
         let sessions = self.sessions.clone();
         match token {
-            Some(t) => match sessions.validate(&t) {
+            Some(t) => match sessions.validate_with_request(
+                &t,
+                Some(req_ip.as_str()),
+                Some(req_ua.as_str()),
+            ) {
                 Some(session) => {
                     req.extensions_mut().insert(SessionInfo {
                         user_id: session.user_id,
